@@ -4,11 +4,13 @@ Guidance for AI coding agents working on the **CSSO NFC member ID system**. Read
 
 ## What this project is
 
-Members of the CSSO organization get an ID card with an NFC sticker. Officers tap the card with an Android phone to:
+Members of the CSSO organization get an ID card with an NFC sticker. Staff tap the card with a phone (Android or iPhone) to:
 
 - log office time in/out,
-- deduct the free ₱40 printing allowance,
-- (planned) check members into events, award KomsayQuest points, and redeem points for merch.
+- deduct the free ₱40 printing allowance (and log walk-in non-member printing),
+- (planned) check members into events.
+
+**Out of scope:** KomsayQuest (the points and rewards system) and merch point redemption. That is a separate system. Do not add points, rewards, or discount logic here.
 
 The system must work **offline** and **ship data when internet returns**. Data moves as **CSV** so it opens in Excel and Google Sheets.
 
@@ -20,9 +22,9 @@ The active app is the **React Native (Expo) officer app in `csso-mobile/`**, one
 
 | Path | Purpose |
 |---|---|
-| `csso-mobile/App.js` | UI: Office, Printing, and Data tabs. Active. |
-| `csso-mobile/src/core.js` | All logic: storage, tap rules, CSV import/export, Google Sheet sync. No UI code. |
-| `csso-mobile/src/nfc.js` | NFC reading via `react-native-nfc-manager`. |
+| `csso-mobile/App.js` | UI: Office, Printing, Issue ID, and Data tabs. Active. |
+| `csso-mobile/src/core.js` | All logic: storage, tap rules, log editing/voiding, CSV import/export, Google Sheet sync. No UI code. |
+| `csso-mobile/src/nfc.js` | NFC reading, sticker writing, and locking via `react-native-nfc-manager`. |
 | `csso-mobile/app.json` | Expo config including the NFC config plugin. |
 | `csso-offline/` | Earlier PWA version (single HTML file, service worker). Fallback. |
 | `csso-offline/google_sheet_receiver.gs` | Google Apps Script receiver used by all app versions. |
@@ -35,28 +37,68 @@ An NFC sticker stores **only a URL containing a random token**. Officer phones h
 
 ## Hard rules (do not break these)
 
-1. **No personal data on the sticker.** Only the link prefix and the random token. No names, student numbers, balances, or points. All of that lives in the member list or database.
-2. **Tokens are random and never regenerated for existing members.** Format: 16 characters from `abcdefghjkmnpqrstuvwxyz23456789`, created with `crypto.getRandomValues`. Never derive tokens from student numbers or use sequential values. The accepted token pattern everywhere is `[A-Za-z0-9_-]{8,64}`; keep all parsers consistent with it.
+1. **No personal data on the sticker.** Only the link prefix and the random token. No names, student numbers, or balances. All of that lives in the member list or database.
+2. **Tokens are random and never regenerated for existing members, except through the explicit Replace flow for a lost or damaged ID.** Format: 16 characters from `abcdefghjkmnpqrstuvwxyz23456789`, created with `crypto.getRandomValues`. Never derive tokens from student numbers or use sequential values. The accepted token pattern everywhere is `[A-Za-z0-9_-]{8,64}`; keep all parsers consistent with it.
 3. **Stickers are locked after writing, so the link prefix is permanent.** Never hardcode a domain that the organization might not keep for 4 years. Do not change URL structure (`?t=<token>` and `/t/<token>`) without a migration plan.
-4. **Never rewrite stickers to change state.** Status, expiry, points, and balance change in data, not on tags.
+4. **Never rewrite stickers to change state.** Status, expiry, and balance change in data, not on tags. Stickers are written only through the Issue ID flow and are locked by default.
 5. **Offline must keep working.** No feature may require network access to complete a tap. Network is only for syncing.
 6. **Sync is idempotent.** Every log row has a unique `id` (UUID). A row is marked `synced` only after the server returns `{ok:true, ids:[...]}` containing that id. The receiver must skip ids it already has.
 7. **Never commit secrets.** The Apps Script `SECRET` and any Supabase service-role key stay out of the repo. The Supabase anon key is public by design but still belongs in config, not scattered through code.
 8. **Escape output.** Use `textContent`, never `innerHTML`, for member-supplied strings. CSV exports must neutralize formula injection (values starting with `=`, `+`, `-`, `@` get a leading `'`).
 
+## Roles and access
+
+Every member has exactly one `role` in the member list. Roles decide two things: who can **operate the app**, and who has **office duty** (gets time in/out logs).
+
+| Role | Operate the app | Office duty logs |
+|---|---|---|
+| `officer` | Office module, Printing (including history edit/void and non-member printing), Issue ID (write and lock stickers), Data (import, all exports, settings, sync, PIN reset) | Yes |
+| `encrypts` (working member, under officers) | Printing (including history edit/void and non-member printing) and data syncing only (Sync now, Export new records). No Office module, no import, no settings | Yes, logged by an officer |
+| `member` (non-working) | Cannot sign in | No. Receives printing only |
+
+Rules:
+- All three roles can **receive** printing. Printing deductions work the same for every role.
+- Only `officer` and `encrypts` can sign in, by scanning their own ID and entering a PIN stored (hashed) on that phone. The app locks when it goes to the background.
+- Permissions are enforced in `src/core.js` (`can()`), not only by hiding buttons. Never move an authorization check into the UI alone.
+- With an empty member list the app shows a setup screen so the first officer can import the CSV. After that, import needs an officer.
+- Unknown or missing roles are treated as `member`.
+- Logs record who performed each action in `operator` and `operator_role`.
+
+## Manual search, printing history, editing logs, and non-member printing
+
+- **Manual search** (Office and Printing tabs) filters the in-memory member list by `student_no`, `full_name`, or `token`, fully offline. Tapping **Use** passes the member’s token into the **same** `core.tap()` / `core.deduct()` path an NFC scan uses, so the 3-second duplicate guard, active and expiry checks, role checks, and balance validation all still apply. Never add a second code path for manual actions.
+- Anything triggered from search must write `[manual]` in the `note` column so Sheet auditors know the card was not physically tapped.
+- **Printing history** is the latest `print` and `print_guest` rows from the local `logs` (newest first, 10 by default, 50 on “Show more”). It shows Manila time (UTC+8, computed manually, no `Intl` dependency), name, student number, `-₱amount`, `balance_after` (empty for `print_guest`), the note, a “waiting to send” flag for unsynced rows, and an **Edit** action.
+- **Editable printing history (misclick correction):** Officers and `encrypts` can edit or void/undo a printing log entry via `src/core.js` (`editPrintLog()` / `voidPrintLog()`) if they misclick an amount or member:
+  - **Validation:** Edited amounts must still obey printing rules (`> 0` and `<= 1000`, rounded to 2 decimals), and for member `print` logs, the recalculated `print_balance` (`oldBalanceAfter + oldAmount - newAmount`) must not drop below `0`.
+  - **Unsynced logs:** Because the row has not reached the Sheet yet, update `amount`, `balance_after`, and `note` in place (or remove the row on Void/Undo) and immediately adjust the member’s local `print_balance` by the difference (`oldAmount - newAmount`). For `print_guest`, update or delete the row without touching any member balance.
+  - **Already-synced logs:** Because `google_sheet_receiver.gs` skips duplicate `id`s, mutating a synced row in place will not update the Sheet. Instead, adjust the member’s local `print_balance` and either replace the entry with a new UUID `id` (marked unsynced) and append `[edited from ₱<old> ref:<old_id>]` (or `[voided ref:<old_id>]`) to `note`, so the next sync records the correction in the Sheet.
+- **Non-member printing** records `action = print_guest` with the amount. Name and student number are optional; if left blank, they automatically default to `Anonymous` (or `Anonymous` / `ANON`). There is no balance (`balance_after` is `""`), no NFC ID, and no member record lookup. It deliberately does **not** use `print`, so a typed student number or anonymous walk-in can never be mistaken for a member’s allowance deduction when reconciling balances in the Sheet.
+
+## Issuing stickers (Issue ID tab, officers only)
+
+- Tokens are generated on the phone with `expo-crypto` secure random bytes (16 characters, rejection sampling so there is no bias, uniqueness checked).
+- Three modes: **New member** (new record and token), **Existing** (write the current token to a first sticker), **Replace lost** (new token; the old one is removed on that phone).
+- Order of operations, which must be kept: save the member as `pending`, write the link, **read it back and verify**, then lock, then record `tag_issue`. If the write or verify fails, `undoIssue` restores the previous state. Never lock before a successful verify.
+- Locking is **permanent**. The app confirms with the exact link and name first. Test on spare stickers with the lock switch off before a real batch.
+- Refuse to overwrite a sticker that already carries another member’s token.
+- The link prefix lives in Settings and must start with `https://` and end with `?t=` or `/t/`.
+- Locking prevents editing, not copying. A sticker can still be cloned onto another tag.
+- A new or replaced token exists only on the issuing phone until other phones import the member CSV. Use the safe import (keeps each phone’s balances; a re-issued student’s old token is dropped and its balance carried over) rather than “replace all”, which overwrites local balances.
+
 ## Data contracts
 
 **Member CSV (import and export).** Columns, matched by header name, case-insensitive:
 
-`token` (required), `student_no`, `full_name`, `status` (`active` or `inactive`, default `active`), `points` (default `0`), `print_balance` (default `40`), `valid_until` (`YYYY-MM-DD`, optional).
+`token` (required), `student_no`, `full_name`, `role` (`officer`, `encrypts`, or `member`, default `member`), `status` (`active` or `inactive`, default `active`), `print_balance` (default `40`), `valid_until` (`YYYY-MM-DD`, optional), `tag_locked` (`yes` once the sticker is locked; informational).
 
 The card matching sheet from `tag_list_maker.html` (`order,student_no,full_name,token,url`) must remain importable as is.
 
 **Log row (app export and Apps Script columns, in this exact order):**
 
-`id, time, officer, student_no, name, action, amount, balance_after, note`
+`id, time, operator, student_no, name, action, amount, balance_after, note, operator_role`
 
-`action` is one of `office_in`, `office_out`, `print`. Planned: `event_checkin`, `points_award`, `points_redeem`. If you change this order or add a column, update **both** `index.html` and `google_sheet_receiver.gs`, and the docs, in the same change.
+`action` is one of `office_in`, `office_out`, `print`, `print_guest` (walk-in, non-member printing with `balance_after = ""`), `tag_issue` (a sticker was written; `note` says `locked` or `not locked`). A `note` containing `[manual]` means the action came from the search bar instead of an NFC scan; `[edited ...]` or `[voided ...]` indicates a corrected printing log. Planned: `event_checkin`. If you change this order or add a column, update **both** `index.html` and `google_sheet_receiver.gs`, and the docs, in the same change.
 
 ## Behavior rules to preserve
 
@@ -68,7 +110,7 @@ The card matching sheet from `tag_list_maker.html` (`order,student_no,full_name,
 ## Working on the code (`csso-mobile/`)
 
 - **Expo (managed workflow with development builds), JavaScript, minimal dependencies.** `react-native-nfc-manager` is a native module, so **Expo Go does not work**; use a development build. Add packages with `npx expo install <pkg>` so versions match the Expo SDK.
-- Keep business logic in `src/core.js` and UI in `App.js`. Do not put tap, balance, or sync rules inside components.
+- Keep business logic in `src/core.js` and UI in `App.js`. Do not put tap, balance, edit/refund, or sync rules inside components.
 - Storage is AsyncStorage key `csso_db_v1` (`{members, logs, settings}`). The phone keeps all unsynced logs plus the last 500 synced ones; the Sheet holds full history. If you change the shape, add a migration so phones do not lose unsent logs.
 - File APIs use the newer `expo-file-system` `File` and `Paths` classes. If the project is on an older Expo SDK, adapt `exportCSV` and `pickAndImport` accordingly.
 - Use `textContent`-style safety: render member strings only through `<Text>`, and keep CSV formula-injection protection in `cell()`.
@@ -79,7 +121,7 @@ The card matching sheet from `tag_list_maker.html` (`order,student_no,full_name,
 Setup:
 
 1. `npx create-expo-app@latest csso-officer --template blank`, then copy `App.js`, `app.json`, and `src/` over the generated files.
-2. `npx expo install @react-native-async-storage/async-storage @react-native-community/netinfo expo-document-picker expo-file-system expo-sharing react-native-safe-area-context`, then `npm install react-native-nfc-manager`.
+2. `npx expo install @react-native-async-storage/async-storage @react-native-community/netinfo expo-document-picker expo-file-system expo-sharing expo-crypto react-native-safe-area-context`, then `npm install react-native-nfc-manager`.
 3. Build a development client: `eas build --profile development --platform android` (and `ios`), or run locally with `npx expo run:android`. **iOS NFC requires a paid Apple Developer account** and a real device; simulators have no NFC.
 
 There is no automated test suite. Test manually on real phones:
@@ -90,20 +132,24 @@ There is no automated test suite. Test manually on real phones:
 4. **Airplane-mode round trip:** do several scans offline, reconnect, confirm rows reach the Sheet exactly once, and resending creates no duplicates.
 5. Export new, recent, and members CSVs and open them in Excel or Sheets. Names with commas, quotes, and a leading `=` must display correctly and safely.
 6. Kill and reopen the app and confirm data persists.
-7. Test on both Android and iOS before calling a change done.
+7. Roles: sign in as officer, encrypts, and member. Officer sees Office, Printing, Issue ID, Data. Encrypts sees only Printing and Data (Sync and Export new only). A member ID is refused at sign-in. Tapping a member in the Office module is refused. First sign-in asks to create a PIN; a wrong PIN is refused.
+8. Issue ID, using spare stickers: write with the lock off and tap it to confirm it opens the right link; then write one with the lock on and confirm another app (for example NFC Tools) can’t rewrite it. Try writing over a sticker that belongs to another member (must be refused), a failed write (member must not be left saved), and Replace lost (old token must stop working).
+9. Search: find a member by name, by student number, and by a token fragment, all in airplane mode. **Use** in the Office tab logs in/out with `[manual]`; **Use** in the Printing tab then Deduct logs `print` with `[manual]`. Searching an inactive or expired member must be refused. A rapid second **Use** on the same member must be ignored.
+10. Printing history & Non-member printing: deduct a few times and confirm they appear newest first with Manila times and the right balance after. Record a non-member print (`print_guest`) with blank name and student number and confirm it defaults to `Anonymous` with no balance (`balance_after` empty) and no NFC prompt, and that it never changes any member’s balance.
+11. Editable printing history: edit an unsynced member print log (for example ₱15 to ₱5) and confirm the member’s `print_balance` increases by ₱10 and `balance_after` updates. Void/undo an unsynced member print log and confirm the full balance is restored. Try editing a member print to an amount larger than their available balance (must be refused). Edit a `print_guest` log and confirm no member balances are affected.
+12. Test on both Android and iOS before calling a change done.
 
 ## Known limitations (be honest about these in docs and UI)
 
 - **Balances can drift between phones** if two officers deduct for the same member while offline. Mitigation: one printing-station phone, and reconcile from the Sheet using the balance formula noted in `google_sheet_receiver.gs`.
-- **No officer login in the offline app.** Anyone holding an unlocked officer phone can use it. A PIN lock is a planned addition.
-- **Standard NTAG stickers can be cloned.** Mitigated by visual name and photo checks. Optional upgrade: NTAG 424 DNA with signed rolling codes, which requires server-side signature verification and different tag programming tools.
+- **PINs are local to each phone** (salted SHA-256, 5 wrong tries lock for a minute). This stops casual misuse, not a determined attacker with the unlocked phone and time. An officer can reset another operator’s PIN from Settings.
+- **Standard NTAG stickers can be cloned.** Locking stops edits, not copying. Mitigated by visual name and photo checks. Optional upgrade: NTAG 424 DNA with signed rolling codes, which requires server-side signature verification and different tag programming tools.
 - Unsent logs live only in the app’s local storage. Uninstalling the app or clearing its data loses them, so encourage regular sync or export.
 
 ## Planned work (not yet built)
 
-- Event check-in with automatic KomsayQuest points.
-- Merch discount redemption from points.
-- Optional device PIN.
+- Event check-in (attendance only).
+- PIN recovery that doesn’t need an officer present, and per-role reports in the Sheet.
 - `valid_until` handling in the Supabase schema (the offline app already supports it).
 - Members-balance refresh flow from the Sheet back to officer phones.
 

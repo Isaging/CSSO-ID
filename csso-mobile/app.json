@@ -1,5 +1,18 @@
 {
-  "plugins": [
-    "expo-sharing"
-  ]
+  "expo": {
+    "name": "CSSO Officer",
+    "slug": "csso-officer",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": { "bundleIdentifier": "org.csso.officer", "supportsTablet": false },
+    "android": { "package": "org.csso.officer" },
+    "plugins": [
+      "expo-sharing",
+      [
+        "react-native-nfc-manager",
+        { "nfcPermission": "CSSO Officer uses NFC to read member ID cards." }
+      ]
+    ]
+  }
 }

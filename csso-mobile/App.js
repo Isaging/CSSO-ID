@@ -1,58 +1,536 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StatusBar,
   StyleSheet,
+  Switch,
   Text,
-  View,
   TextInput,
   TouchableOpacity,
-  ScrollView,
-  Modal,
-  Alert,
-  SafeAreaView,
-  StatusBar,
-  ActivityIndicator,
+  View,
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import {
-  loadDB,
-  saveDB,
   deductPrint,
-  undoLastPrint,
   editPrintLog,
-  voidPrintLog,
-  searchMembers,
   formatTime,
+  loadDB,
+  logGuestPrint,
+  officeTap,
+  saveDB,
+  searchMembers,
+  undoLastPrint,
+  voidPrintLog,
 } from './src/core';
 
+const C = {
+  ink: '#082b33',
+  deep: '#0a3d3d',
+  forest: '#0f6354',
+  teal: '#3e868e',
+  leaf: '#3aa56c',
+  mint: '#5ce09a',
+  bg: '#eef5f3',
+  card: '#ffffff',
+  text: '#082b33',
+  mute: '#4f6f72',
+  line: '#d3e3e0',
+  field: '#f6faf9',
+  accent: '#0f6354',
+  onaccent: '#ffffff',
+  warn: '#b4531a',
+  warnbg: '#fdf0e3',
+  okbg: '#dff6e9',
+  white: '#ffffff',
+};
+
+const TABS = [
+  { key: 'office', label: 'Office', icon: '▤' },
+  { key: 'printing', label: 'Printing', icon: '⎙' },
+  { key: 'issue', label: 'Issue ID', icon: '▣' },
+  { key: 'data', label: 'Data', icon: '☁' },
+];
+
+const ROLES = ['officer', 'encrypts', 'member'];
+const ROLE_LABELS = { officer: 'Officer', encrypts: 'Encrypts', member: 'Member' };
+
+function roleLabel(role) {
+  return ROLE_LABELS[role] || 'Member';
+}
+
+function Card({ children, style }) {
+  return <View style={[styles.card, style]}>{children}</View>;
+}
+
+function SectionTitle({ children, right }) {
+  return (
+    <View style={styles.sectionRow}>
+      <Text style={styles.sectionTitle}>{children}</Text>
+      {right}
+    </View>
+  );
+}
+
+function SyncBadge({ synced }) {
+  return (
+    <View style={[styles.st, synced ? styles.stS : styles.stU]}>
+      <Text style={[styles.stText, synced && styles.stTextS]}>
+        {synced ? 'Synced' : 'Waiting'}
+      </Text>
+    </View>
+  );
+}
+
+function MemberResults({ members, onPick, actionLabel = 'Use', showBalance = true }) {
+  if (!members.length) return null;
+  return (
+    <View>
+      {members.map((member) => (
+        <View key={member.token || member.student_no} style={styles.hit}>
+          <View style={styles.hitInfo}>
+            <Text style={styles.hitName} numberOfLines={1}>
+              {member.full_name || 'Unnamed member'}
+            </Text>
+            <Text style={styles.hitMeta} numberOfLines={1}>
+              {member.student_no || '—'} · {roleLabel(member.role)}
+              {showBalance ? ` · ₱${Number(member.print_balance || 0).toFixed(2)}` : ''}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.btnSm}
+            onPress={() => onPick(member)}
+            accessibilityRole="button"
+          >
+            <Text style={styles.btnSmText}>{actionLabel}</Text>
+          </TouchableOpacity>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: C.bg },
+  body: { flex: 1 },
+  loading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.bg,
+    gap: 10,
+  },
+  loadingText: { color: C.mute, fontSize: 13, fontWeight: '600' },
+
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: C.deep,
+    borderBottomWidth: 3,
+    borderBottomColor: C.mint,
+  },
+  logo: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: C.forest,
+    borderWidth: 2,
+    borderColor: C.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoText: { color: C.white, fontSize: 11, fontWeight: '800' },
+  headerCopy: { flex: 1, minWidth: 0 },
+  headerTitle: { color: C.white, fontSize: 17, fontWeight: '800' },
+  headerSub: { color: '#9fd8cf', fontSize: 11.5, marginTop: 1 },
+  headerRight: { alignItems: 'flex-end', gap: 5 },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 99,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: '#e9eef0',
+  },
+  pillOn: { backgroundColor: C.mint },
+  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: C.ink },
+  pillText: { fontSize: 11.5, fontWeight: '700', color: C.ink },
+  unsynced: {
+    backgroundColor: '#f5b57a',
+    borderRadius: 99,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  unsyncedText: { fontSize: 10.5, fontWeight: '800', color: '#3a1d05' },
+
+  main: { padding: 14, gap: 12, paddingBottom: 24 },
+  card: {
+    backgroundColor: C.card,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 16,
+    padding: 14,
+  },
+  sectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: C.mute,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  h2: { fontSize: 15, fontWeight: '800', color: C.text },
+  muted: { color: C.mute, fontSize: 12.5, lineHeight: 18 },
+  empty: { color: C.mute, fontSize: 13, paddingVertical: 6 },
+
+  input: {
+    borderWidth: 1.5,
+    borderColor: C.line,
+    borderRadius: 12,
+    backgroundColor: C.field,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    fontWeight: '600',
+    color: C.text,
+  },
+  label: { fontSize: 12.5, fontWeight: '700', color: C.mute, marginTop: 8, marginBottom: 4 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  stack: { gap: 8 },
+  flex1: { flex: 1 },
+
+  btn: {
+    backgroundColor: C.accent,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnText: { color: C.onaccent, fontSize: 14, fontWeight: '800' },
+  btnAlt: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: C.line },
+  btnAltText: { color: C.text, fontSize: 14, fontWeight: '800' },
+  btnDanger: { backgroundColor: C.warnbg, borderWidth: 1, borderColor: '#f0c9a8' },
+  btnDangerText: { color: C.warn, fontSize: 13.5, fontWeight: '800' },
+  btnSm: { backgroundColor: C.accent, borderRadius: 9, paddingVertical: 7, paddingHorizontal: 10 },
+  btnSmText: { color: C.onaccent, fontSize: 12.5, fontWeight: '800' },
+  btnSmAlt: { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: C.accent },
+  btnSmAltText: { color: C.accent, fontSize: 12.5, fontWeight: '800' },
+  btnBlock: { width: '100%' },
+
+  searchRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  searchInput: { flex: 1 },
+  hit: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: C.field,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 8,
+  },
+  hitInfo: { flex: 1, minWidth: 0 },
+  hitName: { fontSize: 13.5, fontWeight: '700', color: C.text },
+  hitMeta: { fontSize: 11.5, color: C.mute, marginTop: 2 },
+
+  tap: {
+    backgroundColor: C.deep,
+    borderRadius: 20,
+    paddingVertical: 24,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  tapGlow: {
+    position: 'absolute',
+    top: -70,
+    left: -40,
+    right: -40,
+    height: 180,
+    backgroundColor: C.forest,
+    borderRadius: 100,
+    opacity: 0.5,
+  },
+  tapRingOuter: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    backgroundColor: 'rgba(92,224,154,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tapRingMid: {
+    width: 74,
+    height: 74,
+    borderRadius: 37,
+    backgroundColor: 'rgba(92,224,154,0.28)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tapRingInner: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: C.mint,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tapRingText: { color: C.ink, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+  tapTitle: { color: C.white, fontSize: 16, fontWeight: '800', marginTop: 10 },
+  tapSub: { color: '#9fd8cf', fontSize: 12, marginTop: 2, textAlign: 'center' },
+
+  res: {
+    backgroundColor: C.okbg,
+    borderWidth: 1.5,
+    borderColor: '#9edcba',
+    borderRadius: 14,
+    padding: 12,
+    marginTop: 10,
+  },
+  resBad: { backgroundColor: C.warnbg, borderColor: '#efc4a2' },
+  resTag: {
+    alignSelf: 'flex-start',
+    backgroundColor: C.accent,
+    borderRadius: 7,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    marginBottom: 5,
+  },
+  resTagBad: { backgroundColor: C.warn },
+  resTagText: { color: C.white, fontSize: 10.5, fontWeight: '800', letterSpacing: 0.6 },
+  resTitle: { fontSize: 15, fontWeight: '800', color: C.text },
+  resMeta: { fontSize: 12.5, color: C.mute, marginTop: 2 },
+  txBig: { fontSize: 22, fontWeight: '800', color: C.text, marginTop: 4 },
+  txActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 8,
+  },
+
+  li: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 9,
+    borderTopWidth: 1,
+    borderTopColor: C.line,
+  },
+  liFirst: { borderTopWidth: 0 },
+  liTime: { width: 62, fontSize: 11.5, color: C.mute, fontWeight: '600' },
+  liMid: { flex: 1, minWidth: 0 },
+  liName: { fontSize: 13.5, fontWeight: '700', color: C.text },
+  liNote: { fontSize: 11.5, color: C.mute, marginTop: 1 },
+  liRight: { alignItems: 'flex-end', gap: 3 },
+  liAmt: { fontSize: 14, fontWeight: '800', color: C.text },
+  st: { borderRadius: 5, paddingHorizontal: 6, paddingVertical: 1 },
+  stU: { backgroundColor: C.warnbg },
+  stS: { backgroundColor: C.okbg },
+  stText: { fontSize: 10, fontWeight: '800', color: C.warn },
+  stTextS: { color: C.accent },
+
+  seg: {
+    flexDirection: 'row',
+    gap: 4,
+    backgroundColor: C.card,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 14,
+    padding: 4,
+  },
+  segBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 10, paddingVertical: 9 },
+  segOn: { backgroundColor: C.deep },
+  segText: { fontSize: 13, fontWeight: '700', color: C.mute },
+  segTextOn: { color: C.white },
+  segTiny: { fontSize: 11.5 },
+
+  chipRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 8 },
+  chip: { borderWidth: 1.5, borderColor: C.accent, borderRadius: 9, paddingHorizontal: 10, paddingVertical: 8 },
+  chipText: { color: C.accent, fontSize: 13, fontWeight: '800' },
+  chipOn: { backgroundColor: C.accent },
+  chipOnText: { color: C.white },
+
+  stats: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  stat: {
+    flex: 1,
+    backgroundColor: C.field,
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 12,
+    padding: 10,
+  },
+  statNum: { fontSize: 24, fontWeight: '800', color: C.accent },
+  statLabel: { fontSize: 11.5, color: C.mute, marginTop: 2 },
+
+  note: { backgroundColor: C.warnbg, borderRadius: 12, padding: 10, marginTop: 10 },
+  noteText: { color: C.warn, fontSize: 12.5, lineHeight: 18 },
+
+  nav: {
+    flexDirection: 'row',
+    backgroundColor: C.deep,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    gap: 4,
+  },
+  navBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: 12, paddingVertical: 7 },
+  navOn: { backgroundColor: C.forest },
+  navIcon: { fontSize: 17, fontWeight: '700', color: '#9fd8cf' },
+  navIconOn: { color: C.white },
+  navLabel: { fontSize: 10.5, fontWeight: '700', color: '#9fd8cf', marginTop: 2 },
+  navLabelOn: { color: C.white },
+
+  toast: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    bottom: 84,
+    backgroundColor: C.ink,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderLeftWidth: 5,
+    borderLeftColor: C.mint,
+    zIndex: 20,
+    elevation: 8,
+  },
+  toastText: { color: C.white, fontSize: 13, fontWeight: '600' },
+
+  modal: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(6,31,38,0.72)',
+    zIndex: 100,
+  },
+  backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  sheetWrap: { flex: 1, width: '100%', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: C.card,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    padding: 16,
+    paddingBottom: 28,
+    maxHeight: '92%',
+  },
+  sheetHandle: {
+    width: 42,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: C.line,
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
+  sheetTitle: { fontSize: 17, fontWeight: '800', color: C.text },
+  sheetSub: { fontSize: 12.5, color: C.mute, marginTop: 2, marginBottom: 6 },
+  preview: {
+    backgroundColor: C.field,
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 5,
+  },
+  previewBig: { fontSize: 15, fontWeight: '800', color: C.text, marginTop: 2 },
+  previewLabel: { fontSize: 12, color: C.mute },
+  modalBtns: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  modalBtn: { flex: 1 },
+  confirm: { backgroundColor: C.warnbg, borderRadius: 12, padding: 10, marginTop: 8 },
+  confirmText: { fontSize: 12.5, color: C.warn, lineHeight: 18 },
+  confirmRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+
+  amountField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: C.line,
+    borderRadius: 12,
+    backgroundColor: C.field,
+    paddingHorizontal: 12,
+  },
+  peso: { fontSize: 18, fontWeight: '800', color: C.mute, marginRight: 4 },
+  amountInput: { flex: 1, paddingVertical: 10, fontSize: 20, fontWeight: '800', color: C.text },
+
+  linkBox: { backgroundColor: C.ink, borderRadius: 12, padding: 12, marginTop: 8 },
+  linkText: {
+    color: C.mint,
+    fontSize: 12,
+    fontWeight: '600',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+  },
+  linkNote: { color: '#9fd8cf', fontSize: 11.5, marginTop: 4, lineHeight: 16 },
+
+  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 },
+  switchCopy: { flex: 1, marginRight: 10 },
+  switchTitle: { fontSize: 13.5, fontWeight: '700', color: C.text },
+  switchSub: { fontSize: 11.5, color: C.mute, marginTop: 1 },
+
+  csvRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  csvBtn: { flexGrow: 1, flexBasis: '45%' },
+});
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState('printing');
+  const [activeTab, setActiveTab] = useState('office');
   const [isOnline, setIsOnline] = useState(false);
   const [db, setDb] = useState(null);
+  const [toast, setToast] = useState('');
 
-  // Printing state
   const [amount, setAmount] = useState('15.00');
   const [note, setNote] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [lastTx, setLastTx] = useState(null);
+  const [printMode, setPrintMode] = useState('member');
+  const [printQuery, setPrintQuery] = useState('');
+  const [officeQuery, setOfficeQuery] = useState('');
+  const [guestName, setGuestName] = useState('');
+  const [guestId, setGuestId] = useState('');
+  const [lastPrint, setLastPrint] = useState(null);
+  const [lastOffice, setLastOffice] = useState(null);
 
-  // Edit Modal state
   const [editingLog, setEditingLog] = useState(null);
   const [editAmount, setEditAmount] = useState('');
   const [editNote, setEditNote] = useState('');
+  const [confirmVoid, setConfirmVoid] = useState(false);
 
+  const [issueMode, setIssueMode] = useState('new');
+  const [issueName, setIssueName] = useState('');
+  const [issueStudentNo, setIssueStudentNo] = useState('');
+  const [issueRole, setIssueRole] = useState('member');
+  const [issueValidUntil, setIssueValidUntil] = useState('');
+  const [issueQuery, setIssueQuery] = useState('');
+  const [issueMember, setIssueMember] = useState(null);
+  const [issueLock, setIssueLock] = useState(true);
+
+  const toastTimer = useRef(null);
   const lastTapTimeRef = useRef(0);
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
       setIsOnline(Boolean(state.isConnected && state.isInternetReachable));
     });
-
-    loadDB().then((data) => {
-      setDb(data);
-    });
-
-    return () => unsubscribe();
+    loadDB().then(setDb);
+    return unsubscribe;
   }, []);
+
+  useEffect(() => () => clearTimeout(toastTimer.current), []);
+
+  const showToast = (message) => {
+    setToast(message);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(''), 2400);
+  };
 
   const updateState = async (nextState) => {
     setDb(nextState);
@@ -61,62 +539,161 @@ export default function App() {
 
   if (!db) {
     return (
-      <SafeAreaView style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#1e3a8a" />
+      <SafeAreaView style={styles.loading}>
+        <ActivityIndicator size="large" color={C.accent} />
         <Text style={styles.loadingText}>Loading CSSO Officer…</Text>
       </SafeAreaView>
     );
   }
 
-  const unsyncedCount = db.logs.filter((l) => !l.synced).length;
-  const recentPrintLogs = db.logs.filter((l) => l.action === 'print').slice(0, 15);
-  const searchResults = searchMembers(db.members, searchQuery);
+  const members = db.members || {};
+  const logs = db.logs || [];
+  const unsyncedCount = logs.filter((log) => !log.synced).length;
+  const memberCount = Object.keys(members).length;
+  const role = db.settings.role || 'officer';
+  const officeLogs = logs
+    .filter((log) => log.action === 'office_in' || log.action === 'office_out')
+    .slice(0, 10);
+  const printLogs = logs
+    .filter((log) => log.action === 'print' || log.action === 'print_guest')
+    .slice(0, 10);
+  const officeResults = searchMembers(members, officeQuery);
+  const printResults = searchMembers(members, printQuery);
+  const issueResults = searchMembers(members, issueQuery);
+  const amountNumber = Math.max(0, Math.min(1000, parseFloat(amount) || 0));
+  const amountLabel = amountNumber.toFixed(2);
+  const linkPrefix = db.settings.link_prefix || 'https://your-domain/t/';
 
-  const executeDeduction = ({ token, studentNo }) => {
+  const updateSetting = (key, value) => {
+    updateState({ ...db, settings: { ...db.settings, [key]: value } });
+  };
+
+  const handleOfficePick = (member, manual = true) => {
+    const res = officeTap(db, {
+      token: member.token,
+      studentNo: member.student_no,
+      note: manual ? '[manual]' : '',
+    });
+    if (!res.ok) {
+      setLastOffice({ ok: false, error: res.error });
+      showToast(res.error);
+      return;
+    }
+    updateState(res.nextState);
+    setLastOffice({ ok: true, log: res.log, member: res.member });
+    setOfficeQuery('');
+    showToast(`${res.log.name || 'Member'} timed ${res.log.action === 'office_in' ? 'in' : 'out'}.`);
+  };
+
+  const handlePrintPick = (member, manual = true) => {
     const now = Date.now();
     if (now - lastTapTimeRef.current < 3000) return;
     lastTapTimeRef.current = now;
 
-    const res = deductPrint(db, { token, studentNo, amount, note });
+    const cleanNote = [note.trim(), manual ? '[manual]' : ''].filter(Boolean).join(' ');
+    const res = deductPrint(db, {
+      token: member.token,
+      studentNo: member.student_no,
+      amount,
+      note: cleanNote,
+    });
     if (!res.ok) {
-      Alert.alert('Deduction Failed', res.error);
+      setLastPrint({ ok: false, error: res.error });
+      showToast(res.error);
       return;
     }
-
     updateState(res.nextState);
-    setLastTx(res.log);
-    setNote('');
-    setSearchQuery('');
+    setLastPrint({ ok: true, log: res.log, member: res.member });
+    setPrintQuery('');
+    showToast(`Deducted ₱${res.log.amount.toFixed(2)} from ${res.log.name}.`);
   };
 
-  const handlePreset = (deltaOrValue, isAbsolute = false) => {
-    const current = parseFloat(amount) || 0;
-    const nextVal = isAbsolute ? deltaOrValue : current + deltaOrValue;
-    setAmount(Math.max(0, nextVal).toFixed(2));
+  const handleGuestPrint = () => {
+    const res = logGuestPrint(db, {
+      amount,
+      note: note.trim(),
+      name: guestName,
+      studentNo: guestId,
+    });
+    if (!res.ok) {
+      setLastPrint({ ok: false, error: res.error });
+      showToast(res.error);
+      return;
+    }
+    updateState(res.nextState);
+    setLastPrint({ ok: true, log: res.log });
+    setGuestName('');
+    setGuestId('');
+    showToast(`Logged ₱${res.log.amount.toFixed(2)} from ${res.log.name}.`);
   };
 
-  const openEditModal = (log) => {
+  const handleScan = async (mode) => {
+    if (Platform.OS === 'web') {
+      showToast('NFC is not available in the browser preview. Use search below.');
+      return;
+    }
+    try {
+      const nfc = require('./src/nfc');
+      const supported = await nfc.initNfc();
+      if (!supported) throw new Error('This device does not support NFC.');
+      const token = await nfc.readOnce();
+      if (!token) {
+        showToast('No card found. Hold it against the top of the phone and try again.');
+        return;
+      }
+      if (mode === 'office') handleOfficePick({ token }, false);
+      else handlePrintPick({ token }, false);
+    } catch (e) {
+      showToast((e && e.message) || 'The NFC reader could not start. Use search below.');
+    }
+  };
+
+  const handlePreset = (delta) => {
+    const next = Math.min(1000, Math.max(0, (parseFloat(amount) || 0) + delta));
+    setAmount(next.toFixed(2));
+  };
+
+  const handleUndo = (logId) => {
+    const res = undoLastPrint(db, logId);
+    if (!res.ok) {
+      showToast(res.error);
+      return;
+    }
+    updateState(res.nextState);
+    if (lastPrint && lastPrint.log && lastPrint.log.id === logId) {
+      const next = res.nextState.logs.find(
+        (log) => log.action === 'print' || log.action === 'print_guest'
+      );
+      setLastPrint(next ? { ok: true, log: next } : null);
+    }
+    if (editingLog && editingLog.id === logId) setEditingLog(null);
+    showToast('Transaction undone.');
+  };
+
+  const openEdit = (log) => {
     setEditingLog(log);
-    setEditAmount(log.amount.toFixed(2));
+    setEditAmount(Number(log.amount).toFixed(2));
     setEditNote(log.note || '');
+    setConfirmVoid(false);
   };
 
-  const getBalancePreview = () => {
-    if (!editingLog) return null;
-    const oldAmt = editingLog.amount;
-    const newAmt = parseFloat(editAmount) || 0;
-    const diff = Math.round((oldAmt - newAmt) * 100) / 100;
-    const currentBal = editingLog.balance_after;
-    const previewBal = Math.round((currentBal + diff) * 100) / 100;
+  const closeEdit = () => {
+    setEditingLog(null);
+    setConfirmVoid(false);
+  };
+
+  const getPreview = () => {
+    if (!editingLog || editingLog.action === 'print_guest') return null;
+    const newAmt = parseFloat(editAmount);
+    if (isNaN(newAmt) || newAmt <= 0 || newAmt > 1000) return null;
+    const diff = Math.round((editingLog.amount - newAmt) * 100) / 100;
+    const before = Number(editingLog.balance_after || 0);
+    const after = Math.round((before + diff) * 100) / 100;
     const diffLabel = diff >= 0 ? `(+₱${diff.toFixed(2)})` : `(-₱${Math.abs(diff).toFixed(2)})`;
-    return {
-      before: `₱${currentBal.toFixed(2)}`,
-      after: `₱${previewBal.toFixed(2)}`,
-      diffLabel,
-    };
+    return { before, after, diffLabel };
   };
 
-  const preview = getBalancePreview();
+  const preview = getPreview();
 
   const handleSaveEdit = () => {
     if (!editingLog) return;
@@ -125,609 +702,935 @@ export default function App() {
       newAmount: editAmount,
       newNote: editNote,
     });
-
     if (!res.ok) {
-      Alert.alert('Update Failed', res.error);
+      showToast(res.error);
       return;
     }
-
     updateState(res.nextState);
-    setEditingLog(null);
+    if (lastPrint && lastPrint.log && lastPrint.log.id === editingLog.id) {
+      const updated = res.nextState.logs.find((log) => log.id === editingLog.id);
+      if (updated) setLastPrint({ ok: true, log: updated });
+    }
+    closeEdit();
+    showToast('Print log updated.');
   };
 
   const handleVoidRefund = () => {
     if (!editingLog) return;
-    Alert.alert(
-      'Confirm Refund',
-      `Void this transaction and refund full ₱${editingLog.amount.toFixed(2)} to ${editingLog.name}?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Confirm Refund',
-          style: 'destructive',
-          onPress: () => {
-            const res = voidPrintLog(db, editingLog.id);
-            if (!res.ok) {
-              Alert.alert('Refund Failed', res.error);
-              return;
-            }
-            updateState(res.nextState);
-            if (lastTx && lastTx.id === editingLog.id) {
-              setLastTx(null);
-            }
-            setEditingLog(null);
-          },
-        },
-      ]
+    const res = voidPrintLog(db, editingLog.id);
+    if (!res.ok) {
+      showToast(res.error);
+      return;
+    }
+    updateState(res.nextState);
+    if (lastPrint && lastPrint.log && lastPrint.log.id === editingLog.id) {
+      const next = res.nextState.logs.find(
+        (log) => log.action === 'print' || log.action === 'print_guest'
+      );
+      setLastPrint(next ? { ok: true, log: next } : null);
+    }
+    closeEdit();
+    showToast(`Refunded ₱${Number(editingLog.amount).toFixed(2)}.`);
+  };
+
+  const handleSync = () => {
+    if (!db.settings.sheet_url || !db.settings.secret) {
+      showToast('Add the receiver URL and secret key in settings first.');
+      return;
+    }
+    showToast('Sync is not connected in this build. Export CSV to reconcile.');
+  };
+
+  const notReady = (label) => {
+    showToast(`${label} is not connected in this build.`);
+  };
+
+  const renderOfficeResult = () => {
+    if (!lastOffice) {
+      return (
+        <Card>
+          <SectionTitle>Last scan</SectionTitle>
+          <Text style={styles.empty}>Tap an ID or search a member to log time in/out.</Text>
+        </Card>
+      );
+    }
+    if (!lastOffice.ok) {
+      return (
+        <Card>
+          <SectionTitle>Last scan</SectionTitle>
+          <View style={[styles.res, styles.resBad]}>
+            <View style={[styles.resTag, styles.resTagBad]}>
+              <Text style={styles.resTagText}>NOT LOGGED</Text>
+            </View>
+            <Text style={styles.resTitle}>Could not log time</Text>
+            <Text style={styles.resMeta}>{lastOffice.error}</Text>
+          </View>
+        </Card>
+      );
+    }
+    const { log, member } = lastOffice;
+    return (
+      <Card>
+        <SectionTitle>Last scan</SectionTitle>
+        <View style={styles.res}>
+          <View style={styles.resTag}>
+            <Text style={styles.resTagText}>
+              {log.action === 'office_in' ? 'TIME IN LOGGED' : 'TIME OUT LOGGED'}
+            </Text>
+          </View>
+          <Text style={styles.resTitle}>{log.name}</Text>
+          <Text style={styles.resMeta}>
+            {log.student_no || '—'} · {(member.status || 'active').toUpperCase()} ·{' '}
+            {formatTime(log.time)}
+          </Text>
+        </View>
+      </Card>
     );
   };
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" />
-
-      {/* Top App Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>CSSO Officer</Text>
-        <View style={styles.headerBadges}>
-          <View style={[styles.badge, isOnline ? styles.badgeOnline : styles.badgeOffline]}>
-            <Text style={styles.badgeText}>{isOnline ? 'Online' : 'Offline'}</Text>
+  const renderPrintLast = () => {
+    if (!lastPrint) {
+      return (
+        <Card>
+          <SectionTitle>Last transaction</SectionTitle>
+          <Text style={styles.empty}>No print transaction yet.</Text>
+        </Card>
+      );
+    }
+    if (!lastPrint.ok) {
+      return (
+        <Card>
+          <SectionTitle>Last transaction</SectionTitle>
+          <View style={[styles.res, styles.resBad]}>
+            <View style={[styles.resTag, styles.resTagBad]}>
+              <Text style={styles.resTagText}>NOT LOGGED</Text>
+            </View>
+            <Text style={styles.resTitle}>Could not log print</Text>
+            <Text style={styles.resMeta}>{lastPrint.error}</Text>
           </View>
-          {unsyncedCount > 0 && (
-            <View style={[styles.badge, styles.badgePending]}>
-              <Text style={styles.badgeTextPending}>{`${unsyncedCount} !`}</Text>
-            </View>
-          )}
+        </Card>
+      );
+    }
+    const { log } = lastPrint;
+    const isGuest = log.action === 'print_guest';
+    return (
+      <Card>
+        <SectionTitle>Last transaction</SectionTitle>
+        <View style={styles.res}>
+          <View style={styles.resTag}>
+            <Text style={styles.resTagText}>{isGuest ? 'PAID' : 'DEDUCTED'}</Text>
+          </View>
+          <Text style={styles.txBig}>
+            {isGuest ? '' : '-'}₱{Number(log.amount).toFixed(2)}
+          </Text>
+          <Text style={styles.resTitle}>{log.name}</Text>
+          <View style={styles.txActions}>
+            <Text style={styles.resMeta}>
+              {isGuest
+                ? `No balance · walk-in · ${formatTime(log.time)}`
+                : `Balance after ₱${Number(log.balance_after || 0).toFixed(2)} · ${formatTime(
+                    log.time
+                  )}`}
+            </Text>
+            <TouchableOpacity
+              style={[styles.btnSm, styles.btnSmAlt]}
+              onPress={() => handleUndo(log.id)}
+              accessibilityRole="button"
+            >
+              <Text style={styles.btnSmAltText}>Undo tap</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      </Card>
+    );
+  };
 
-      {/* Main Tab Content */}
-      <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
-        {activeTab === 'printing' && (
-          <View>
-            {/* Section 1: Amount to Deduct */}
-            <View style={styles.card}>
-              <Text style={styles.sectionTitle}>1. AMOUNT TO DEDUCT (₱)</Text>
-              <View style={styles.amountRow}>
-                <View style={styles.amountInputContainer}>
-                  <Text style={styles.currencyPrefix}>₱</Text>
-                  <TextInput
-                    style={styles.amountInput}
-                    keyboardType="numeric"
-                    value={amount}
-                    onChangeText={setAmount}
-                    placeholder="0.00"
-                  />
-                </View>
-                <View style={styles.presetGroup}>
-                  <TouchableOpacity style={styles.presetChip} onPress={() => handlePreset(5)}>
-                    <Text style={styles.presetText}>+₱5</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.presetChip} onPress={() => handlePreset(10)}>
-                    <Text style={styles.presetText}>+₱10</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.presetChip} onPress={() => handlePreset(20)}>
-                    <Text style={styles.presetText}>+₱20</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.presetChip, styles.presetMax]} onPress={() => handlePreset(40, true)}>
-                    <Text style={[styles.presetText, styles.presetMaxText]}>₱40</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
+  const renderOffice = () => (
+    <>
+      <Card>
+        <SectionTitle>Can’t tap? Look up a member</SectionTitle>
+        <View style={styles.searchRow}>
+          <TextInput
+            style={[styles.input, styles.searchInput]}
+            placeholder="Name, student no, or token…"
+            placeholderTextColor={C.teal}
+            value={officeQuery}
+            onChangeText={setOfficeQuery}
+            autoCorrect={false}
+          />
+          <TouchableOpacity
+            style={styles.btnSm}
+            onPress={() => {
+              if (officeResults[0]) handleOfficePick(officeResults[0], true);
+              else showToast('No matching member found.');
+            }}
+            accessibilityRole="button"
+          >
+            <Text style={styles.btnSmText}>Go</Text>
+          </TouchableOpacity>
+        </View>
+        {officeQuery.trim() && !officeResults.length ? (
+          <Text style={styles.empty}>No member found. Check the ID or spelling.</Text>
+        ) : null}
+        <MemberResults members={officeResults} onPick={(m) => handleOfficePick(m, true)} />
+      </Card>
 
-              <View style={styles.noteContainer}>
-                <Text style={styles.noteLabel}>Note:</Text>
-                <TextInput
-                  style={styles.noteInput}
-                  placeholder="Thesis print (optional)"
-                  value={note}
-                  onChangeText={setNote}
-                />
-              </View>
+      <TouchableOpacity
+        style={styles.tap}
+        activeOpacity={0.85}
+        onPress={() => handleScan('office')}
+        accessibilityRole="button"
+      >
+        <View style={styles.tapGlow} />
+        <View style={styles.tapRingOuter}>
+          <View style={styles.tapRingMid}>
+            <View style={styles.tapRingInner}>
+              <Text style={styles.tapRingText}>NFC</Text>
             </View>
+          </View>
+        </View>
+        <Text style={styles.tapTitle}>Tap ID for time in / time out</Text>
+        <Text style={styles.tapSub}>Hold the card near the back of the phone</Text>
+      </TouchableOpacity>
 
-            {/* Section 2: Identify Member */}
-            <View style={styles.card}>
-              <Text style={styles.sectionTitle}>2. IDENTIFY MEMBER (Tap or Search)</Text>
+      {renderOfficeResult()}
 
-              {/* NFC Tap Card CTA */}
-              <TouchableOpacity
-                style={styles.tapCard}
-                activeOpacity={0.8}
-                onPress={() => {
-                  Alert.alert('NFC Scanning Ready', 'Hold member’s card against the phone to deduct.');
-                }}
-              >
-                <Text style={styles.tapCardIcon}>💳</Text>
-                <Text style={styles.tapCardTitle}>(( TAP ID TO DEDUCT ))</Text>
-                <Text style={styles.tapCardSubtitle}>Target: ₱{amount} deduction</Text>
-              </TouchableOpacity>
-
-              {/* Manual Fallback Search */}
-              <Text style={styles.fallbackLabel}>Manual Fallback (Name / Stud No):</Text>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="🔍 e.g. 2023-12345 or Juan"
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
-
-              {searchResults.length > 0 && (
-                <View style={styles.searchResultsBox}>
-                  {searchResults.map((m) => (
-                    <View key={m.token} style={styles.searchResultRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.searchMemberName}>{m.full_name}</Text>
-                        <Text style={styles.searchMemberDetails}>
-                          {m.student_no} • Bal: ₱{(m.print_balance || 0).toFixed(2)}
-                        </Text>
-                      </View>
-                      <TouchableOpacity
-                        style={styles.useButton}
-                        onPress={() => executeDeduction({ token: m.token, studentNo: m.student_no })}
-                      >
-                        <Text style={styles.useButtonText}>Use</Text>
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-                </View>
-              )}
-            </View>
-
-            {/* Section 3: Last Transaction */}
-            {lastTx && (
-              <View style={[styles.card, styles.lastTxCard]}>
-                <View style={styles.lastTxHeader}>
-                  <Text style={styles.lastTxTitle}>LAST TRANSACTION</Text>
-                  <TouchableOpacity
-                    style={styles.undoButton}
-                    onPress={() => {
-                      const res = undoLastPrint(db, lastTx.id);
-                      if (res.ok) {
-                        updateState(res.nextState);
-                        setLastTx(null);
-                      }
-                    }}
-                  >
-                    <Text style={styles.undoButtonText}>Undo Tap</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.lastTxRow}>
-                  <Text style={styles.lastTxOk}>[OK]</Text>
-                  <Text style={styles.lastTxAmount}>-₱{lastTx.amount.toFixed(2)}</Text>
-                  <Text style={styles.lastTxDivider}>|</Text>
-                  <Text style={styles.lastTxName}>{lastTx.name}</Text>
-                </View>
-                <Text style={styles.lastTxBalance}>
-                  Bal After: ₱{(lastTx.balance_after || 0).toFixed(2)}
+      <Card>
+        <SectionTitle>Recent office logs</SectionTitle>
+        {officeLogs.length ? (
+          officeLogs.map((log, index) => (
+            <View key={log.id} style={[styles.li, index === 0 && styles.liFirst]}>
+              <Text style={styles.liTime}>{formatTime(log.time)}</Text>
+              <View style={styles.liMid}>
+                <Text style={styles.liName} numberOfLines={1}>
+                  {log.name}
+                </Text>
+                <Text style={styles.liNote} numberOfLines={1}>
+                  {log.action === 'office_in' ? 'Time in' : 'Time out'}
+                  {log.note ? ` · ${log.note}` : ''}
                 </Text>
               </View>
-            )}
-
-            {/* Section 4: Recent Printing History */}
-            <View style={styles.card}>
-              <Text style={styles.sectionTitle}>RECENT PRINTING HISTORY</Text>
-              {recentPrintLogs.length === 0 ? (
-                <Text style={styles.emptyText}>No recent printing transactions.</Text>
-              ) : (
-                recentPrintLogs.map((log) => (
-                  <View key={log.id} style={styles.historyRow}>
-                    <View style={styles.historyMain}>
-                      <View style={styles.historyTopLine}>
-                        <Text style={styles.historyBullet}>•</Text>
-                        <Text style={styles.historyTime}>{formatTime(log.time)}</Text>
-                        <Text style={styles.historyDivider}>|</Text>
-                        <Text style={styles.historyName} numberOfLines={1}>
-                          {log.name}
-                        </Text>
-                        <Text style={styles.historyAmount}>-₱{log.amount.toFixed(2)}</Text>
-                      </View>
-                      <View style={styles.historySubLine}>
-                        <Text style={styles.historyBal}>
-                          Bal: ₱{(log.balance_after || 0).toFixed(2)}
-                        </Text>
-                        <View
-                          style={[
-                            styles.syncBadge,
-                            log.synced ? styles.syncBadgeDone : styles.syncBadgePending,
-                          ]}
-                        >
-                          <Text style={styles.syncBadgeText}>
-                            {log.synced ? 'Synced' : 'Unsynced'}
-                          </Text>
-                        </View>
-                        {log.note ? (
-                          <Text style={styles.historyNote} numberOfLines={1}>
-                            ({log.note})
-                          </Text>
-                        ) : null}
-                      </View>
-                    </View>
-                    <TouchableOpacity
-                      style={styles.editBtn}
-                      onPress={() => openEditModal(log)}
-                    >
-                      <Text style={styles.editBtnText}>Edit</Text>
-                    </TouchableOpacity>
-                  </View>
-                ))
-              )}
+              <SyncBadge synced={log.synced} />
             </View>
-          </View>
+          ))
+        ) : (
+          <Text style={styles.empty}>No office logs yet.</Text>
         )}
+      </Card>
+    </>
+  );
 
-        {activeTab === 'office' && (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>OFFICE LOGS</Text>
-            <Text style={styles.emptyText}>Switch to Printing tab to deduct print allowance.</Text>
-          </View>
-        )}
-
-        {activeTab === 'data' && (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>DATA & SYNC</Text>
-            <Text style={styles.emptyText}>
-              {unsyncedCount} unsynced logs ready for Google Sheets upload.
-            </Text>
-          </View>
-        )}
-      </ScrollView>
-
-      {/* EDIT / REFUND MODAL VIEW */}
-      <Modal
-        visible={Boolean(editingLog)}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setEditingLog(null)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>EDIT PRINT LOG</Text>
-            <View style={styles.modalDivider} />
-
-            {editingLog && (
-              <>
-                <View style={styles.modalInfoRow}>
-                  <Text style={styles.modalLabel}>Member:</Text>
-                  <Text style={styles.modalVal}>{editingLog.name}</Text>
-                </View>
-                <View style={styles.modalInfoRow}>
-                  <Text style={styles.modalLabel}>ID:</Text>
-                  <Text style={styles.modalVal}>{editingLog.student_no}</Text>
-                </View>
-                <View style={styles.modalInfoRow}>
-                  <Text style={styles.modalLabel}>Time:</Text>
-                  <Text style={styles.modalVal}>
-                    {formatTime(editingLog.time)} ({editingLog.synced ? 'Synced' : 'Unsynced'})
-                  </Text>
-                </View>
-
-                <View style={[styles.modalInfoRow, { marginTop: 10 }]}>
-                  <Text style={styles.modalLabel}>Prev Amount:</Text>
-                  <Text style={styles.modalVal}>₱ {editingLog.amount.toFixed(2)}</Text>
-                </View>
-
-                <View style={styles.modalInputGroup}>
-                  <Text style={styles.modalLabel}>New Amount:</Text>
-                  <View style={styles.modalInputWrap}>
-                    <Text style={styles.modalInputPrefix}>₱</Text>
-                    <TextInput
-                      style={styles.modalInput}
-                      keyboardType="numeric"
-                      value={editAmount}
-                      onChangeText={setEditAmount}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.modalInputGroup}>
-                  <Text style={styles.modalLabel}>Note:</Text>
-                  <TextInput
-                    style={[styles.modalInput, styles.modalNoteInput]}
-                    placeholder="Wrong pages / correction"
-                    value={editNote}
-                    onChangeText={setEditNote}
-                  />
-                </View>
-
-                {preview && (
-                  <View style={styles.previewBox}>
-                    <Text style={styles.previewTitle}>Balance Preview:</Text>
-                    <Text style={styles.previewNumbers}>
-                      {preview.before}  ---&gt;  {preview.after} {preview.diffLabel}
-                    </Text>
-                  </View>
-                )}
-
-                <View style={styles.modalActionRow}>
-                  <TouchableOpacity
-                    style={[styles.modalBtn, styles.modalBtnCancel]}
-                    onPress={() => setEditingLog(null)}
-                  >
-                    <Text style={styles.modalBtnCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.modalBtn, styles.modalBtnSave]}
-                    onPress={handleSaveEdit}
-                  >
-                    <Text style={styles.modalBtnSaveText}>Save Edit</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.modalDivider} />
-
-                <TouchableOpacity
-                  style={styles.voidButton}
-                  onPress={handleVoidRefund}
-                >
-                  <Text style={styles.voidButtonText}>
-                    Void / Refund Full ₱{editingLog.amount.toFixed(2)}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
-        </View>
-      </Modal>
-
-      {/* Bottom Navigation */}
-      <View style={styles.tabBar}>
+  const renderPrinting = () => (
+    <>
+      <View style={styles.seg}>
         <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'office' && styles.tabItemActive]}
-          onPress={() => setActiveTab('office')}
+          style={[styles.segBtn, printMode === 'member' && styles.segOn]}
+          onPress={() => setPrintMode('member')}
+          accessibilityRole="button"
         >
-          <Text style={[styles.tabLabel, activeTab === 'office' && styles.tabLabelActive]}>
-            Office
+          <Text style={[styles.segText, printMode === 'member' && styles.segTextOn]}>
+            CSSO member
           </Text>
         </TouchableOpacity>
-
         <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'printing' && styles.tabItemActive]}
-          onPress={() => setActiveTab('printing')}
+          style={[styles.segBtn, printMode === 'guest' && styles.segOn]}
+          onPress={() => setPrintMode('guest')}
+          accessibilityRole="button"
         >
-          <Text style={[styles.tabLabel, activeTab === 'printing' && styles.tabLabelActive]}>
-            PRINTING
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.tabItem, activeTab === 'data' && styles.tabItemActive]}
-          onPress={() => setActiveTab('data')}
-        >
-          <Text style={[styles.tabLabel, activeTab === 'data' && styles.tabLabelActive]}>
-            Data
+          <Text style={[styles.segText, printMode === 'guest' && styles.segTextOn]}>
+            Non-member
           </Text>
         </TouchableOpacity>
       </View>
+
+      <Card>
+        <SectionTitle>
+          {printMode === 'member' ? 'Amount to deduct' : 'Amount paid'}
+        </SectionTitle>
+        <View style={styles.amountField}>
+          <Text style={styles.peso}>₱</Text>
+          <TextInput
+            style={styles.amountInput}
+            value={amount}
+            onChangeText={setAmount}
+            keyboardType="decimal-pad"
+            placeholder="0.00"
+            placeholderTextColor={C.teal}
+          />
+        </View>
+        <View style={styles.chipRow}>
+          {[5, 10, 20, printMode === 'member' ? 40 : 50].map((value) => (
+            <TouchableOpacity
+              key={value}
+              style={styles.chip}
+              onPress={() => handlePreset(value)}
+              accessibilityRole="button"
+            >
+              <Text style={styles.chipText}>+₱{value}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <Text style={styles.label}>Note (optional)</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="e.g. 2 pages, colored"
+          placeholderTextColor={C.teal}
+          value={note}
+          onChangeText={setNote}
+        />
+      </Card>
+
+      {printMode === 'member' ? (
+        <Card>
+          <SectionTitle>Identify member</SectionTitle>
+          <TouchableOpacity
+            style={styles.tap}
+            activeOpacity={0.85}
+            onPress={() => handleScan('printing')}
+            accessibilityRole="button"
+          >
+            <View style={styles.tapGlow} />
+            <View style={styles.tapRingOuter}>
+              <View style={styles.tapRingMid}>
+                <View style={styles.tapRingInner}>
+                  <Text style={styles.tapRingText}>NFC</Text>
+                </View>
+              </View>
+            </View>
+            <Text style={styles.tapTitle}>Tap ID to deduct</Text>
+            <Text style={styles.tapSub}>Will deduct ₱{amountLabel}</Text>
+          </TouchableOpacity>
+
+          <Text style={styles.label}>Or look up a member</Text>
+          <View style={styles.searchRow}>
+            <TextInput
+              style={[styles.input, styles.searchInput]}
+              placeholder="Name, student no, or token…"
+              placeholderTextColor={C.teal}
+              value={printQuery}
+              onChangeText={setPrintQuery}
+              autoCorrect={false}
+            />
+            <TouchableOpacity
+              style={styles.btnSm}
+              onPress={() => {
+                if (printResults[0]) handlePrintPick(printResults[0], true);
+                else showToast('No matching member found.');
+              }}
+              accessibilityRole="button"
+            >
+              <Text style={styles.btnSmText}>Go</Text>
+            </TouchableOpacity>
+          </View>
+          {printQuery.trim() && !printResults.length ? (
+            <Text style={styles.empty}>No member found. Check the ID or spelling.</Text>
+          ) : null}
+          <MemberResults members={printResults} onPick={(m) => handlePrintPick(m, true)} />
+        </Card>
+      ) : (
+        <Card>
+          <SectionTitle>Walk-in details (optional)</SectionTitle>
+          <Text style={styles.label}>Name</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Anonymous"
+            placeholderTextColor={C.teal}
+            value={guestName}
+            onChangeText={setGuestName}
+          />
+          <Text style={styles.label}>Student number</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="ANON"
+            placeholderTextColor={C.teal}
+            value={guestId}
+            onChangeText={setGuestId}
+            autoCapitalize="characters"
+          />
+          <View style={styles.note}>
+            <Text style={styles.noteText}>
+              No ID tap and no balance change for non-members.
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.btn, styles.btnBlock, { marginTop: 10 }]}
+            onPress={handleGuestPrint}
+            accessibilityRole="button"
+          >
+            <Text style={styles.btnText}>Log non-member print</Text>
+          </TouchableOpacity>
+        </Card>
+      )}
+
+      {renderPrintLast()}
+
+      <Card>
+        <SectionTitle>Recent printing history</SectionTitle>
+        {printLogs.length ? (
+          printLogs.map((log, index) => {
+            const isGuest = log.action === 'print_guest';
+            return (
+              <View key={log.id} style={[styles.li, index === 0 && styles.liFirst]}>
+                <Text style={styles.liTime}>{formatTime(log.time)}</Text>
+                <View style={styles.liMid}>
+                  <Text style={styles.liName} numberOfLines={1}>
+                    {log.name}
+                  </Text>
+                  <Text style={styles.liNote} numberOfLines={1}>
+                    {isGuest
+                      ? 'Walk-in · no balance'
+                      : `Balance after ₱${Number(log.balance_after || 0).toFixed(2)}`}
+                    {log.note ? ` · ${log.note}` : ''}
+                  </Text>
+                </View>
+                <View style={styles.liRight}>
+                  <Text style={styles.liAmt}>
+                    {isGuest ? '' : '-'}₱{Number(log.amount).toFixed(2)}
+                  </Text>
+                  <View style={styles.row}>
+                    <SyncBadge synced={log.synced} />
+                    <TouchableOpacity
+                      style={[styles.btnSm, styles.btnSmAlt]}
+                      onPress={() => openEdit(log)}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.btnSmAltText}>Edit</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+            );
+          })
+        ) : (
+          <Text style={styles.empty}>No printing history yet.</Text>
+        )}
+      </Card>
+    </>
+  );
+
+  const handleIssue = () => {
+    if (issueMode === 'new' && !issueName.trim()) {
+      showToast('Enter the member name first.');
+      return;
+    }
+    if (issueMode !== 'new' && !issueMember) {
+      showToast('Select a member first.');
+      return;
+    }
+    showToast('Sticker writing is not connected in this build yet.');
+  };
+
+  const issueToken =
+    issueMode === 'existing'
+      ? issueMember?.token || '<select a member>'
+      : '<new token>';
+
+  const renderIssue = () => (
+    <>
+      <Card>
+        <SectionTitle>Issue a sticker</SectionTitle>
+        <View style={styles.seg}>
+          {[
+            ['new', 'New member'],
+            ['existing', 'Existing'],
+            ['replace', 'Replace lost'],
+          ].map(([key, label]) => (
+            <TouchableOpacity
+              key={key}
+              style={[styles.segBtn, issueMode === key && styles.segOn]}
+              onPress={() => {
+                setIssueMode(key);
+                setIssueMember(null);
+                setIssueQuery('');
+              }}
+              accessibilityRole="button"
+            >
+              <Text
+                style={[
+                  styles.segText,
+                  styles.segTiny,
+                  issueMode === key && styles.segTextOn,
+                ]}
+              >
+                {label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {issueMode === 'new' ? (
+          <>
+            <Text style={styles.label}>Full name</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Juan Dela Cruz"
+              placeholderTextColor={C.teal}
+              value={issueName}
+              onChangeText={setIssueName}
+            />
+            <Text style={styles.label}>Student number</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="2026-0001"
+              placeholderTextColor={C.teal}
+              value={issueStudentNo}
+              onChangeText={setIssueStudentNo}
+            />
+            <Text style={styles.label}>Role</Text>
+            <View style={styles.chipRow}>
+              {ROLES.map((roleKey) => (
+                <TouchableOpacity
+                  key={roleKey}
+                  style={[styles.chip, issueRole === roleKey && styles.chipOn]}
+                  onPress={() => setIssueRole(roleKey)}
+                  accessibilityRole="button"
+                >
+                  <Text
+                    style={[styles.chipText, issueRole === roleKey && styles.chipOnText]}
+                  >
+                    {roleLabel(roleKey)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={styles.label}>Valid until (YYYY-MM-DD, optional)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="2027-06-30"
+              placeholderTextColor={C.teal}
+              value={issueValidUntil}
+              onChangeText={setIssueValidUntil}
+              autoCapitalize="none"
+            />
+          </>
+        ) : (
+          <>
+            <Text style={styles.label}>
+              {issueMode === 'replace' ? 'Find the member to re-issue' : 'Find the member'}
+            </Text>
+            <View style={styles.searchRow}>
+              <TextInput
+                style={[styles.input, styles.searchInput]}
+                placeholder="Name, student no, or token…"
+                placeholderTextColor={C.teal}
+                value={issueQuery}
+                onChangeText={setIssueQuery}
+                autoCorrect={false}
+              />
+              <TouchableOpacity
+                style={styles.btnSm}
+                onPress={() => {
+                  if (issueResults[0]) {
+                    setIssueMember(issueResults[0]);
+                    setIssueQuery('');
+                  } else {
+                    showToast('No matching member found.');
+                  }
+                }}
+                accessibilityRole="button"
+              >
+                <Text style={styles.btnSmText}>Find</Text>
+              </TouchableOpacity>
+            </View>
+            <MemberResults
+              members={issueResults}
+              onPick={(member) => {
+                setIssueMember(member);
+                setIssueQuery('');
+              }}
+              actionLabel="Select"
+              showBalance={false}
+            />
+            {issueMember ? (
+              <View style={styles.hit}>
+                <View style={styles.hitInfo}>
+                  <Text style={styles.hitName}>{issueMember.full_name}</Text>
+                  <Text style={styles.hitMeta}>
+                    {issueMember.student_no || '—'} · {roleLabel(issueMember.role)} ·{' '}
+                    {issueMode === 'replace'
+                      ? 'New token will replace the old one on this phone'
+                      : `Token ${issueMember.token}`}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
+            {issueMode === 'replace' ? (
+              <View style={styles.note}>
+                <Text style={styles.noteText}>
+                  The old sticker stops working on this phone. Other phones pick up the new
+                  token on their next safe member import.
+                </Text>
+              </View>
+            ) : null}
+          </>
+        )}
+      </Card>
+
+      <Card>
+        <SectionTitle>Link preview</SectionTitle>
+        <View style={styles.linkBox}>
+          <Text style={styles.linkText} numberOfLines={2}>
+            {linkPrefix}{issueToken}
+          </Text>
+          <Text style={styles.linkNote}>
+            The sticker stores only this link. No name, student number, or balance.
+          </Text>
+        </View>
+        <Text style={styles.muted}>
+          The link prefix lives in Data settings. Tokens are random and never derived from
+          student numbers.
+        </Text>
+      </Card>
+
+      <Card>
+        <SectionTitle>Write & lock</SectionTitle>
+        <View style={styles.switchRow}>
+          <View style={styles.switchCopy}>
+            <Text style={styles.switchTitle}>Lock sticker after writing</Text>
+            <Text style={styles.switchSub}>Locking is permanent. Test on a spare sticker first.</Text>
+          </View>
+          <Switch
+            value={issueLock}
+            onValueChange={setIssueLock}
+            trackColor={{ false: C.line, true: C.teal }}
+            thumbColor={issueLock ? C.mint : '#f4f3f4'}
+          />
+        </View>
+        <TouchableOpacity
+          style={[styles.btn, styles.btnBlock, { marginTop: 12 }]}
+          onPress={handleIssue}
+          accessibilityRole="button"
+        >
+          <Text style={styles.btnText}>
+            {issueMode === 'new' ? 'Issue sticker' : 'Write, verify & lock'}
+          </Text>
+        </TouchableOpacity>
+        <View style={styles.note}>
+          <Text style={styles.noteText}>
+            Sticker writing, verify, and lock are not connected in this UI build yet.
+          </Text>
+        </View>
+      </Card>
+    </>
+  );
+
+  const renderData = () => (
+    <>
+      <Card>
+        <SectionTitle>Officer & sync settings</SectionTitle>
+        <Text style={styles.label}>Officer name</Text>
+        <TextInput
+          style={styles.input}
+          value={db.settings.officer || ''}
+          onChangeText={(value) => updateSetting('officer', value)}
+          placeholder="Officer Juan"
+          placeholderTextColor={C.teal}
+        />
+        <Text style={styles.label}>Receiver URL</Text>
+        <TextInput
+          style={styles.input}
+          value={db.settings.sheet_url || ''}
+          onChangeText={(value) => updateSetting('sheet_url', value)}
+          placeholder="https://script.google.com/macros/s/…/exec"
+          placeholderTextColor={C.teal}
+          autoCapitalize="none"
+        />
+        <Text style={styles.label}>Secret key</Text>
+        <TextInput
+          style={styles.input}
+          value={db.settings.secret || ''}
+          onChangeText={(value) => updateSetting('secret', value)}
+          placeholder="Shared secret"
+          placeholderTextColor={C.teal}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+        <Text style={styles.label}>Link prefix</Text>
+        <TextInput
+          style={styles.input}
+          value={db.settings.link_prefix || ''}
+          onChangeText={(value) => updateSetting('link_prefix', value)}
+          placeholder="https://your-domain/t/"
+          placeholderTextColor={C.teal}
+          autoCapitalize="none"
+        />
+        <Text style={styles.muted}>
+          Must start with https:// and end with ?t= or /t/.
+        </Text>
+      </Card>
+
+      <Card>
+        <SectionTitle>Cloud sync</SectionTitle>
+        <View style={styles.stats}>
+          <View style={styles.stat}>
+            <Text style={styles.statNum}>{unsyncedCount}</Text>
+            <Text style={styles.statLabel}>Waiting to send</Text>
+          </View>
+          <View style={styles.stat}>
+            <Text style={styles.statNum}>{memberCount}</Text>
+            <Text style={styles.statLabel}>Members on phone</Text>
+          </View>
+        </View>
+        <TouchableOpacity
+          style={[styles.btn, styles.btnBlock, { marginTop: 10 }]}
+          onPress={handleSync}
+          accessibilityRole="button"
+        >
+          <Text style={styles.btnText}>Sync now</Text>
+        </TouchableOpacity>
+        <Text style={styles.muted}>
+          Safe to repeat. Records already synced are skipped by the Sheet.
+        </Text>
+      </Card>
+
+      <Card>
+        <SectionTitle>CSV import & export</SectionTitle>
+        <TouchableOpacity
+          style={[styles.btn, styles.btnBlock]}
+          onPress={() => notReady('Member CSV import')}
+          accessibilityRole="button"
+        >
+          <Text style={styles.btnText}>Import members CSV</Text>
+        </TouchableOpacity>
+        <View style={styles.csvRow}>
+          <TouchableOpacity
+            style={[styles.btn, styles.btnAlt, styles.csvBtn]}
+            onPress={() => notReady('Export new records')}
+            accessibilityRole="button"
+          >
+            <Text style={styles.btnAltText}>Export new records</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.btn, styles.btnAlt, styles.csvBtn]}
+            onPress={() => notReady('Export recent logs')}
+            accessibilityRole="button"
+          >
+            <Text style={styles.btnAltText}>Export recent logs</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.btn, styles.btnAlt, styles.csvBtn]}
+            onPress={() => notReady('Export members CSV')}
+            accessibilityRole="button"
+          >
+            <Text style={styles.btnAltText}>Export members CSV</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.muted}>
+          Safe import keeps each phone’s local balances. Avoid “replace all” on phones that
+          are already offline.
+        </Text>
+      </Card>
+
+      <Card>
+        <SectionTitle>Heads up</SectionTitle>
+        <Text style={styles.muted}>
+          Print balances can drift when two phones deduct for the same member while offline.
+          Sync often and reconcile from the Sheet.
+        </Text>
+      </Card>
+    </>
+  );
+
+  const renderEditModal = () => (
+    <Modal
+      visible={!!editingLog}
+      transparent
+      animationType="slide"
+      onRequestClose={closeEdit}
+    >
+      <View style={styles.modal}>
+        <Pressable style={styles.backdrop} onPress={closeEdit} />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.sheetWrap}
+        >
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ gap: 4 }}
+            >
+              {editingLog ? (
+                <>
+                  <Text style={styles.sheetTitle}>Edit print log</Text>
+                  <Text style={styles.sheetSub}>
+                    {editingLog.name} · {formatTime(editingLog.time)} ·{' '}
+                    {editingLog.synced ? 'Synced' : 'Unsynced'}
+                  </Text>
+                  {editingLog.action === 'print_guest' ? (
+                    <View style={styles.note}>
+                      <Text style={styles.noteText}>
+                        Walk-in · no member balance is changed.
+                      </Text>
+                    </View>
+                  ) : null}
+                  <Text style={styles.label}>
+                    New amount (previous ₱{Number(editingLog.amount).toFixed(2)})
+                  </Text>
+                  <View style={styles.amountField}>
+                    <Text style={styles.peso}>₱</Text>
+                    <TextInput
+                      style={styles.amountInput}
+                      value={editAmount}
+                      onChangeText={setEditAmount}
+                      keyboardType="decimal-pad"
+                      placeholder="0.00"
+                      placeholderTextColor={C.teal}
+                    />
+                  </View>
+                  <Text style={styles.label}>Note</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={editNote}
+                    onChangeText={setEditNote}
+                    placeholder="e.g. 2 pages, colored"
+                    placeholderTextColor={C.teal}
+                  />
+                  {preview ? (
+                    <View style={styles.preview}>
+                      <Text style={styles.previewLabel}>Balance after</Text>
+                      <Text style={styles.previewBig}>
+                        ₱{preview.before.toFixed(2)} → ₱{preview.after.toFixed(2)}
+                      </Text>
+                      <Text style={styles.previewLabel}>{preview.diffLabel}</Text>
+                    </View>
+                  ) : null}
+                  <View style={styles.modalBtns}>
+                    <TouchableOpacity
+                      style={[styles.btn, styles.btnAlt, styles.modalBtn]}
+                      onPress={closeEdit}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.btnAltText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.btn, styles.modalBtn]}
+                      onPress={handleSaveEdit}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.btnText}>Save edit</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <TouchableOpacity
+                    style={[styles.btn, styles.btnDanger, { marginTop: 8 }]}
+                    onPress={() => setConfirmVoid(true)}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.btnDangerText}>
+                      Void / refund full ₱{Number(editingLog.amount).toFixed(2)}
+                    </Text>
+                  </TouchableOpacity>
+                  {confirmVoid ? (
+                    <View style={styles.confirm}>
+                      <Text style={styles.confirmText}>
+                        Refund ₱{Number(editingLog.amount).toFixed(2)}? This removes the
+                        log from this phone.
+                      </Text>
+                      <View style={styles.confirmRow}>
+                        <TouchableOpacity
+                          style={[styles.btn, styles.btnAlt, styles.modalBtn]}
+                          onPress={() => setConfirmVoid(false)}
+                          accessibilityRole="button"
+                        >
+                          <Text style={styles.btnAltText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.btn, styles.btnDanger, styles.modalBtn]}
+                          onPress={handleVoidRefund}
+                          accessibilityRole="button"
+                        >
+                          <Text style={styles.btnDangerText}>Refund</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+  );
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" />
+      <View style={styles.header}>
+        <View style={styles.logo}>
+          <Text style={styles.logoText}>CS</Text>
+        </View>
+        <View style={styles.headerCopy}>
+          <Text style={styles.headerTitle}>CSSO Officer</Text>
+          <Text style={styles.headerSub} numberOfLines={1}>
+            {db.settings.officer || 'Officer'} · {roleLabel(role)}
+          </Text>
+        </View>
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={[styles.pill, isOnline && styles.pillOn]}
+            onPress={() =>
+              showToast(
+                isOnline
+                  ? 'Online. Ready to sync.'
+                  : 'Working offline. Logs stay on this phone.'
+              )
+            }
+            accessibilityRole="button"
+          >
+            <View style={styles.dot} />
+            <Text style={styles.pillText}>{isOnline ? 'Online' : 'Offline'}</Text>
+          </TouchableOpacity>
+          <View style={styles.unsynced}>
+            <Text style={styles.unsyncedText}>{unsyncedCount} unsynced</Text>
+          </View>
+        </View>
+      </View>
+
+      <ScrollView
+        style={styles.body}
+        contentContainerStyle={styles.main}
+        keyboardShouldPersistTaps="handled"
+      >
+        {activeTab === 'office' ? renderOffice() : null}
+        {activeTab === 'printing' ? renderPrinting() : null}
+        {activeTab === 'issue' ? renderIssue() : null}
+        {activeTab === 'data' ? renderData() : null}
+      </ScrollView>
+
+      {!editingLog ? (
+        <View style={styles.nav}>
+          {TABS.map((tab) => (
+            <TouchableOpacity
+              key={tab.key}
+              style={[styles.navBtn, activeTab === tab.key && styles.navOn]}
+              onPress={() => setActiveTab(tab.key)}
+              accessibilityRole="button"
+              accessibilityLabel={tab.label}
+            >
+              <Text
+                style={[styles.navIcon, activeTab === tab.key && styles.navIconOn]}
+              >
+                {tab.icon}
+              </Text>
+              <Text
+                style={[styles.navLabel, activeTab === tab.key && styles.navLabelOn]}
+              >
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+
+      {toast ? (
+        <View style={styles.toast} pointerEvents="none">
+          <Text style={styles.toastText}>{toast}</Text>
+        </View>
+      ) : null}
+
+      {renderEditModal()}
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f1f5f9' },
-  centerContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { marginTop: 12, color: '#64748b', fontSize: 16 },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#ffffff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e2e8f0',
-  },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#0f172a' },
-  headerBadges: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 },
-  badgeOnline: { backgroundColor: '#dcfce7' },
-  badgeOffline: { backgroundColor: '#fee2e2' },
-  badgeText: { fontSize: 12, fontWeight: '600', color: '#334155' },
-  badgePending: { backgroundColor: '#fed7aa' },
-  badgeTextPending: { fontSize: 12, fontWeight: '700', color: '#9a3412' },
-  content: { flex: 1, padding: 12 },
-  card: {
-    backgroundColor: '#ffffff',
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  sectionTitle: { fontSize: 13, fontWeight: '700', color: '#475569', letterSpacing: 0.5, marginBottom: 10 },
-  amountRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
-  amountInputContainer: {
-    flex: 1.2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#cbd5e1',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    backgroundColor: '#f8fafc',
-    height: 44,
-  },
-  currencyPrefix: { fontSize: 18, fontWeight: '700', color: '#334155', marginRight: 4 },
-  amountInput: { flex: 1, fontSize: 18, fontWeight: '700', color: '#0f172a' },
-  presetGroup: { flex: 2, flexDirection: 'row', gap: 4 },
-  presetChip: {
-    flex: 1,
-    height: 44,
-    backgroundColor: '#f1f5f9',
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  presetText: { fontSize: 12, fontWeight: '600', color: '#1e293b' },
-  presetMax: { backgroundColor: '#e0e7ff', borderColor: '#c7d2fe' },
-  presetMaxText: { color: '#3730a3' },
-  noteContainer: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  noteLabel: { fontSize: 13, color: '#64748b', fontWeight: '500' },
-  noteInput: {
-    flex: 1,
-    height: 38,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    fontSize: 13,
-    backgroundColor: '#f8fafc',
-  },
-  tapCard: {
-    backgroundColor: '#2563eb',
-    borderRadius: 10,
-    paddingVertical: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 14,
-  },
-  tapCardIcon: { fontSize: 24, marginBottom: 4 },
-  tapCardTitle: { color: '#ffffff', fontSize: 16, fontWeight: '800', letterSpacing: 0.5 },
-  tapCardSubtitle: { color: '#bfdbfe', fontSize: 12, marginTop: 2 },
-  fallbackLabel: { fontSize: 12, fontWeight: '600', color: '#64748b', marginBottom: 6 },
-  searchInput: {
-    height: 40,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    backgroundColor: '#f8fafc',
-    fontSize: 14,
-  },
-  searchResultsBox: {
-    marginTop: 6,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 8,
-    backgroundColor: '#ffffff',
-  },
-  searchResultRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  searchMemberName: { fontSize: 14, fontWeight: '700', color: '#0f172a' },
-  searchMemberDetails: { fontSize: 12, color: '#64748b', marginTop: 2 },
-  useButton: { backgroundColor: '#059669', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
-  useButtonText: { color: '#ffffff', fontSize: 12, fontWeight: '700' },
-  lastTxCard: { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0', borderWidth: 1 },
-  lastTxHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  lastTxTitle: { fontSize: 12, fontWeight: '700', color: '#166534' },
-  undoButton: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, backgroundColor: '#fee2e2' },
-  undoButtonText: { fontSize: 11, fontWeight: '700', color: '#991b1b' },
-  lastTxRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  lastTxOk: { color: '#16a34a', fontWeight: '800', fontSize: 13 },
-  lastTxAmount: { fontSize: 15, fontWeight: '700', color: '#dc2626' },
-  lastTxDivider: { color: '#cbd5e1' },
-  lastTxName: { fontSize: 14, fontWeight: '600', color: '#1f2937' },
-  lastTxBalance: { fontSize: 12, color: '#4b5563', marginTop: 4 },
-  historyRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  historyMain: { flex: 1 },
-  historyTopLine: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  historyBullet: { color: '#64748b' },
-  historyTime: { fontSize: 12, color: '#475569' },
-  historyDivider: { color: '#cbd5e1' },
-  historyName: { fontSize: 13, fontWeight: '600', color: '#0f172a', maxWidth: 120 },
-  historyAmount: { fontSize: 13, fontWeight: '700', color: '#dc2626' },
-  historySubLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2, paddingLeft: 10 },
-  historyBal: { fontSize: 11, color: '#64748b' },
-  syncBadge: { paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4 },
-  syncBadgeDone: { backgroundColor: '#dcfce7' },
-  syncBadgePending: { backgroundColor: '#fed7aa' },
-  syncBadgeText: { fontSize: 10, fontWeight: '600', color: '#334155' },
-  historyNote: { fontSize: 11, color: '#94a3b8', fontStyle: 'italic' },
-  editBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  editBtnText: { fontSize: 12, fontWeight: '600', color: '#2563eb' },
-  emptyText: { fontSize: 13, color: '#94a3b8', fontStyle: 'italic', paddingVertical: 8 },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
-    justifyContent: 'center',
-    padding: 20,
-  },
-  modalContent: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 18,
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  modalTitle: { fontSize: 16, fontWeight: '800', color: '#0f172a', textAlign: 'center' },
-  modalDivider: { height: 1, backgroundColor: '#e2e8f0', marginVertical: 12 },
-  modalInfoRow: { flexDirection: 'row', marginBottom: 6 },
-  modalLabel: { width: 95, fontSize: 13, color: '#64748b', fontWeight: '600' },
-  modalVal: { flex: 1, fontSize: 13, color: '#0f172a', fontWeight: '600' },
-  modalInputGroup: { flexDirection: 'row', alignItems: 'center', marginVertical: 6 },
-  modalInputWrap: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    height: 38,
-  },
-  modalInputPrefix: { fontSize: 14, fontWeight: '700', color: '#64748b', marginRight: 4 },
-  modalInput: { flex: 1, fontSize: 14, fontWeight: '600', color: '#0f172a' },
-  modalNoteInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    height: 38,
-    fontSize: 13,
-  },
-  previewBox: {
-    backgroundColor: '#eff6ff',
-    borderColor: '#bfdbfe',
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 10,
-    marginVertical: 12,
-  },
-  previewTitle: { fontSize: 12, fontWeight: '700', color: '#1e40af', marginBottom: 4 },
-  previewNumbers: { fontSize: 13, fontWeight: '700', color: '#1e3a8a' },
-  modalActionRow: { flexDirection: 'row', gap: 10, marginTop: 6 },
-  modalBtn: { flex: 1, height: 40, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
-  modalBtnCancel: { backgroundColor: '#f1f5f9', borderWidth: 1, borderColor: '#cbd5e1' },
-  modalBtnCancelText: { color: '#475569', fontWeight: '600' },
-  modalBtnSave: { backgroundColor: '#2563eb' },
-  modalBtnSaveText: { color: '#ffffff', fontWeight: '700' },
-  voidButton: { paddingVertical: 10, borderRadius: 8, backgroundColor: '#fee2e2', alignItems: 'center' },
-  voidButtonText: { color: '#b91c1c', fontSize: 13, fontWeight: '700' },
-  tabBar: {
-    flexDirection: 'row',
-    backgroundColor: '#ffffff',
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-    height: 54,
-  },
-  tabItem: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  tabItemActive: { borderTopWidth: 2, borderTopColor: '#2563eb' },
-  tabLabel: { fontSize: 12, fontWeight: '600', color: '#64748b' },
-  tabLabelActive: { color: '#2563eb', fontWeight: '800' },
-});
