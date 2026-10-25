@@ -32,6 +32,7 @@ import {
   saveDB,
   searchMembers,
   signInWithToken,
+  syncLogs,
   todayManila,
   undoLastPrint,
   updateMember,
@@ -1153,16 +1154,22 @@ const hasAdminKey = true;
     showToast(`Refunded ₱${Number(editingLog.amount).toFixed(2)}.`);
   };
 
-  const handleSync = () => {
+  const handleSync = async () => {
     if (!can(session, 'sync')) {
       showToast('You do not have permission to sync.');
       return;
     }
-    if (!db.settings.sheet_url || !db.settings.secret) {
-      showToast('Add the receiver URL and secret key in settings first.');
+    const res = await syncLogs(db, session);
+    if (!res.ok) {
+      showToast(res.error);
       return;
     }
-    showToast('Sync is not connected in this build. Export CSV to reconcile.');
+    await updateState(res.nextState);
+    showToast(
+      res.count > 0
+        ? `Synced ${res.count} record${res.count === 1 ? '' : 's'}.`
+        : 'Already up to date.'
+    );
   };
 
   const notReady = (label) => {

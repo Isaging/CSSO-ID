@@ -748,3 +748,66 @@ export function editPrintLog(state, { logId, newAmount, newNote, session }) {
 export function voidPrintLog(state, logId, session) {
   return undoLastPrint(state, logId, session);
 }
+
+// Perform cloud sync
+export async function syncLogs(state, session) {
+  if (!can(session, 'sync')) {
+    return { ok: false, error: 'You do not have permission to sync.' };
+  }
+  const url = state.settings.sheet_url;
+  const secret = state.settings.secret;
+  if (!url || !secret) {
+    return { ok: false, error: 'Add the receiver URL and secret key in settings first.' };
+  }
+
+  const unsynced = state.logs.filter((l) => !l.synced);
+  if (unsynced.length === 0) {
+    return { ok: true, count: 0, nextState: state };
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        secret,
+        logs: unsynced,
+      }),
+    });
+
+    const res = await response.json();
+    if (!res.ok) throw new Error(res.error || 'Server rejected the sync');
+
+    const syncedIds = new Set(res.ids || []);
+    const nextLogs = state.logs
+      .map((log) => {
+        if (syncedIds.has(log.id)) {
+          return { ...log, synced: true };
+        }
+        return log;
+      })
+      .filter((log) => {
+        // Office logs are append-only to the Sheet.
+        // Once synced, we prune old office logs from the phone,
+        // keeping only the single latest row per member to maintain the offline toggle.
+        if (log.action !== 'office_in' && log.action !== 'office_out') return true;
+        if (!log.synced) return true;
+
+        const isLatest = !state.logs.some(
+          (other) =>
+            (other.token === log.token || (other.student_no && other.student_no === log.student_no)) &&
+            (other.action === 'office_in' || other.action === 'office_out') &&
+            new Date(other.time) > new Date(log.time)
+        );
+        return isLatest;
+      });
+
+    return {
+      ok: true,
+      count: syncedIds.size,
+      nextState: { ...state, logs: nextLogs },
+    };
+  } catch (err) {
+    return { ok: false, error: err.message || 'Sync failed. Check your connection.' };
+  }
+}
