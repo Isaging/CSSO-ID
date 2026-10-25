@@ -1,0 +1,55 @@
+/* 
+ * CSSO NFC Member ID System: Google Sheet Receiver
+ * Data Contract: id, time, operator, student_no, name, action, amount, balance_after, note, operator_role
+ */
+
+const SECRET = 'CSSO_NFC_Secret_2026_#!99'; // Palitan ito ng iyong shared secret
+
+function doPost(e) {
+  try {
+    const data = JSON.parse(e.postData.contents);
+    
+    // Auth Check
+    if (data.secret !== SECRET) {
+      return ContentService.createTextOutput(JSON.stringify({ok: false, error: 'Unauthorized'}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    const rows = data.logs; // Array of objects matching contract
+    const existingIds = sheet.getDataRange().getValues().map(r => r[0]); // id is column 0
+    
+    const newIds = [];
+    const rowsToAppend = [];
+
+    rows.forEach(row => {
+      // Idempotency check: Skip if ID already exists
+      if (!existingIds.includes(row.id)) {
+        rowsToAppend.push([
+          row.id,
+          row.time,
+          row.operator,
+          row.student_no,
+          row.name,
+          row.action,
+          row.amount,
+          row.balance_after,
+          row.note,
+          row.operator_role
+        ]);
+        newIds.push(row.id);
+      }
+    });
+
+    if (rowsToAppend.length > 0) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, rowsToAppend.length, 10).setValues(rowsToAppend);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({ok: true, ids: newIds}))
+      .setMimeType(ContentService.MimeType.JSON);
+      
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ok: false, error: err.toString()}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
