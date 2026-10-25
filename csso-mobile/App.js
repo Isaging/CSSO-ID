@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -17,15 +18,25 @@ import {
 } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import {
+  can,
   deductPrint,
   editPrintLog,
+  expireSemester,
   formatTime,
+  isRetentionPast,
   loadDB,
   logGuestPrint,
   officeTap,
+  purgeExpiredData,
+  purgeMember,
   saveDB,
   searchMembers,
+  setAdminKey as storeAdminKey,
+  signInWithToken,
+  todayManila,
   undoLastPrint,
+  updateMember,
+  verifyAdminKey,
   voidPrintLog,
 } from './src/core';
 
@@ -53,15 +64,31 @@ const C = {
 const TABS = [
   { key: 'office', label: 'Office', icon: '▤' },
   { key: 'printing', label: 'Printing', icon: '⎙' },
+  { key: 'members', label: 'Members', icon: '▦' },
   { key: 'issue', label: 'Issue ID', icon: '▣' },
   { key: 'data', label: 'Data', icon: '☁' },
 ];
 
-const ROLES = ['officer', 'encrypts', 'member'];
-const ROLE_LABELS = { officer: 'Officer', encrypts: 'Encrypts', member: 'Member' };
+const ROLES = ['member', 'encrypts', 'officer', 'admin'];
+const ROLE_LABELS = {
+  member: 'Member',
+  encrypts: 'Encrypts',
+  officer: 'Officer',
+  admin: 'Admin',
+};
+const STATUSES = ['active', 'expired', 'inactive'];
+const STATUS_LABELS = { active: 'Active', expired: 'Expired', inactive: 'Inactive' };
 
 function roleLabel(role) {
   return ROLE_LABELS[role] || 'Member';
+}
+
+function statusLabel(status) {
+  return STATUS_LABELS[status] || 'Active';
+}
+
+function today() {
+  return todayManila();
 }
 
 function Card({ children, style }) {
@@ -73,6 +100,14 @@ function SectionTitle({ children, right }) {
     <View style={styles.sectionRow}>
       <Text style={styles.sectionTitle}>{children}</Text>
       {right}
+    </View>
+  );
+}
+
+function Tag({ children, style, textStyle }) {
+  return (
+    <View style={[styles.tag, style]}>
+      <Text style={[styles.tagText, textStyle]}>{children}</Text>
     </View>
   );
 }
@@ -171,6 +206,14 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
   },
   unsyncedText: { fontSize: 10.5, fontWeight: '800', color: '#3a1d05' },
+  lockChip: {
+    borderRadius: 99,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: '#9fd8cf',
+  },
+  lockChipText: { fontSize: 10.5, fontWeight: '800', color: '#9fd8cf' },
 
   main: { padding: 14, gap: 12, paddingBottom: 24 },
   card: {
@@ -481,6 +524,85 @@ const styles = StyleSheet.create({
 
   csvRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   csvBtn: { flexGrow: 1, flexBasis: '45%' },
+
+  login: { flex: 1, backgroundColor: C.bg },
+  loginScroll: { padding: 18, gap: 12, paddingBottom: 32 },
+  loginBrand: { alignItems: 'center', marginTop: 6 },
+  loginLogo: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: C.deep,
+    borderWidth: 3,
+    borderColor: C.mint,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loginLogoText: { color: C.white, fontSize: 20, fontWeight: '800' },
+  loginTitle: { fontSize: 23, fontWeight: '800', color: C.text, marginTop: 10 },
+  loginSub: { fontSize: 13, color: C.mute, textAlign: 'center', marginTop: 4, lineHeight: 19 },
+  loginStatusRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 9 },
+  loginTap: {
+    backgroundColor: C.deep,
+    borderRadius: 20,
+    paddingVertical: 26,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  loginRule: { flexDirection: 'row', gap: 10, alignItems: 'flex-start', marginTop: 8 },
+  loginRuleDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: C.mint,
+    marginTop: 5,
+  },
+  loginRuleText: { flex: 1, color: C.white, fontSize: 12.5, lineHeight: 18 },
+  loginNote: { color: C.mute, fontSize: 12, lineHeight: 18, textAlign: 'center' },
+  loginKey: { backgroundColor: C.card, borderWidth: 1.5, borderColor: C.accent },
+  loginKeyText: { color: C.accent, fontSize: 14, fontWeight: '800' },
+
+  memberRow: {
+    borderWidth: 1,
+    borderColor: C.line,
+    borderRadius: 13,
+    backgroundColor: C.field,
+    padding: 11,
+    marginTop: 8,
+  },
+  memberRowPast: { borderColor: '#f0c9a8', backgroundColor: C.warnbg },
+  memberTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  memberName: { fontSize: 14, fontWeight: '800', color: C.text },
+  memberMeta: { fontSize: 11.5, color: C.mute, marginTop: 2 },
+  memberTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginTop: 6 },
+  tag: { borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, backgroundColor: C.line },
+  tagText: { fontSize: 10, fontWeight: '800', color: C.mute, letterSpacing: 0.3 },
+  tagRole: { backgroundColor: '#e0f1ed' },
+  tagRoleText: { color: C.accent },
+  tagActive: { backgroundColor: C.okbg },
+  tagActiveText: { color: C.accent },
+  tagExpired: { backgroundColor: C.warnbg },
+  tagExpiredText: { color: C.warn },
+  tagInactive: { backgroundColor: '#e9eef0' },
+  tagInactiveText: { color: C.mute },
+  memberActions: { flexDirection: 'row', gap: 6, marginTop: 9, flexWrap: 'wrap' },
+  memberAction: { flexGrow: 1 },
+  memberBalance: { fontSize: 13, fontWeight: '800', color: C.text, marginTop: 5 },
+  retentionWarn: { color: C.warn, fontSize: 11.5, fontWeight: '700', marginTop: 3 },
+  retentionOk: { color: C.mute, fontSize: 11.5, marginTop: 3 },
+
+  gate: { alignItems: 'center', paddingVertical: 18, gap: 8 },
+  gateIcon: { fontSize: 30 },
+  gateTitle: { fontSize: 17, fontWeight: '800', color: C.text, textAlign: 'center' },
+  gateText: { fontSize: 12.5, color: C.mute, textAlign: 'center', lineHeight: 18 },
+
+  adminKeyBox: { backgroundColor: C.field, borderRadius: 12, padding: 10, marginTop: 8 },
+  adminKeyText: { color: C.mute, fontSize: 12, lineHeight: 18 },
+  errText: { color: C.warn, fontSize: 12.5, fontWeight: '700', marginTop: 6 },
+  modalTitle: { fontSize: 18, fontWeight: '800', color: C.text },
+  modalSub: { fontSize: 12.5, color: C.mute, marginTop: 2, marginBottom: 8 },
+  switchOnly: { marginTop: 8 },
 });
 
 export default function App() {
@@ -488,6 +610,25 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(false);
   const [db, setDb] = useState(null);
   const [toast, setToast] = useState('');
+  const [session, setSession] = useState(null);
+  const [loginBusy, setLoginBusy] = useState(false);
+
+  const [adminPrompt, setAdminPrompt] = useState(false);
+  const [adminKey, setAdminKey] = useState('');
+  const [adminKeyConfirm, setAdminKeyConfirm] = useState('');
+  const [adminError, setAdminError] = useState('');
+  const [adminBusy, setAdminBusy] = useState(false);
+
+  const [memberQuery, setMemberQuery] = useState('');
+  const [memberFilter, setMemberFilter] = useState('all');
+  const [editingMember, setEditingMember] = useState(null);
+  const [editRole, setEditRole] = useState('member');
+  const [editStatus, setEditStatus] = useState('active');
+  const [editValidUntil, setEditValidUntil] = useState('');
+  const [editReset, setEditReset] = useState(false);
+  const [confirmExpire, setConfirmExpire] = useState(false);
+  const [confirmPurgeAll, setConfirmPurgeAll] = useState(false);
+  const [confirmPurgeMember, setConfirmPurgeMember] = useState(false);
 
   const [amount, setAmount] = useState('15.00');
   const [note, setNote] = useState('');
@@ -524,6 +665,26 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  // Lock whenever the app leaves the foreground. The session is never persisted.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'background') {
+        setSession(null);
+        setActiveTab('office');
+        setAdminPrompt(false);
+        setAdminKey('');
+        setAdminKeyConfirm('');
+        setAdminError('');
+        setEditingMember(null);
+        setEditingLog(null);
+        setConfirmExpire(false);
+        setConfirmPurgeAll(false);
+        setConfirmPurgeMember(false);
+      }
+    });
+    return () => sub.remove();
+  }, []);
+
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
   const showToast = (message) => {
@@ -550,29 +711,300 @@ export default function App() {
   const logs = db.logs || [];
   const unsyncedCount = logs.filter((log) => !log.synced).length;
   const memberCount = Object.keys(members).length;
-  const role = db.settings.role || 'officer';
+  const hasAdminKey = Boolean(db.settings.admin_key_hash && db.settings.admin_key_salt);
+  const operatorName = session?.member
+    ? session.member.full_name || session.member.student_no || 'Officer'
+    : session?.name || 'Admin';
+  const operatorRole = session?.role || 'admin';
+  const isAdminUnlocked = Boolean(session && can(session, 'members'));
+  const visibleTabs = TABS.filter((tab) => can(session, `${tab.key}_tab`));
   const officeLogs = logs
     .filter((log) => log.action === 'office_in' || log.action === 'office_out')
     .slice(0, 10);
   const printLogs = logs
     .filter((log) => log.action === 'print' || log.action === 'print_guest')
     .slice(0, 10);
-  const officeResults = searchMembers(members, officeQuery);
+  const officeResults = searchMembers(members, officeQuery, [
+    'admin',
+    'officer',
+    'encrypts',
+  ]);
   const printResults = searchMembers(members, printQuery);
   const issueResults = searchMembers(members, issueQuery);
   const amountNumber = Math.max(0, Math.min(1000, parseFloat(amount) || 0));
   const amountLabel = amountNumber.toFixed(2);
   const linkPrefix = db.settings.link_prefix || 'https://your-domain/t/';
+  const purgeCount = Object.values(members).filter(
+    (member) => isRetentionPast(member) && member.token !== session?.member?.token
+  ).length;
 
   const updateSetting = (key, value) => {
+    if (!can(session, 'settings')) {
+      showToast('Admin Master Key required to change settings.');
+      return;
+    }
     updateState({ ...db, settings: { ...db.settings, [key]: value } });
   };
+
+  const lockApp = () => {
+    setSession(null);
+    setActiveTab('office');
+    setAdminPrompt(false);
+    setAdminKey('');
+    setAdminKeyConfirm('');
+    setAdminError('');
+    setEditingMember(null);
+    setEditingLog(null);
+    setConfirmExpire(false);
+    setConfirmPurgeAll(false);
+    setConfirmPurgeMember(false);
+  };
+
+  const finishLogin = (nextSession) => {
+    setSession(nextSession);
+    setAdminPrompt(false);
+    setAdminKey('');
+    setAdminKeyConfirm('');
+    setAdminError('');
+    const firstTab =
+      nextSession.role === 'encrypts'
+        ? 'printing'
+        : can(nextSession, 'office_tab')
+          ? 'office'
+          : 'printing';
+    setActiveTab(firstTab);
+    const name = nextSession.member
+      ? nextSession.member.full_name || nextSession.member.student_no || 'Officer'
+      : '';
+    showToast(
+      nextSession.member
+        ? `Signed in as ${name} (${roleLabel(nextSession.role)}).`
+        : 'Signed in with Admin Master Key.'
+    );
+  };
+
+  const handleLoginToken = (rawToken) => {
+    const res = signInWithToken(db, rawToken);
+    if (!res.ok) {
+      showToast(res.error);
+      return;
+    }
+    finishLogin(res.session);
+  };
+
+  const handleLoginScan = async () => {
+    if (Platform.OS === 'web') {
+      showToast('NFC is not available in the browser preview. Pick a test card below.');
+      return;
+    }
+    if (loginBusy) return;
+    setLoginBusy(true);
+    try {
+      const nfc = require('./src/nfc');
+      const supported = await nfc.initNfc();
+      if (!supported) throw new Error('This device does not support NFC.');
+      const token = await nfc.readOnce();
+      if (!token) {
+        showToast('No card found. Hold it against the top of the phone and try again.');
+        return;
+      }
+      handleLoginToken(token);
+    } catch (e) {
+      showToast((e && e.message) || 'The NFC reader could not start.');
+    } finally {
+      setLoginBusy(false);
+    }
+  };
+
+  const openAdminPrompt = () => {
+    setAdminPrompt(true);
+    setAdminKey('');
+    setAdminKeyConfirm('');
+    setAdminError('');
+  };
+
+  const handleAdminSubmit = async () => {
+    if (adminBusy) return;
+    if (!hasAdminKey && adminKey !== adminKeyConfirm) {
+      setAdminError('The two keys do not match.');
+      return;
+    }
+
+    setAdminBusy(true);
+    try {
+      if (!hasAdminKey) {
+        const res = await storeAdminKey(db, adminKey);
+        if (!res.ok) {
+          setAdminError(res.error);
+          return;
+        }
+        await updateState(res.nextState);
+        if (session) {
+          setSession({ ...session, adminUnlocked: true });
+          showToast('Admin Master Key set. Admin tools unlocked.');
+        } else {
+          finishLogin({ member: null, role: 'admin', adminUnlocked: true, name: 'Admin' });
+        }
+        setAdminPrompt(false);
+        setAdminKey('');
+        setAdminKeyConfirm('');
+        setAdminError('');
+        return;
+      }
+
+      const res = await verifyAdminKey(db, adminKey);
+      if (res.nextState && res.nextState !== db) await updateState(res.nextState);
+      if (!res.ok) {
+        setAdminError(res.error);
+        return;
+      }
+      if (session) {
+        setSession({ ...session, adminUnlocked: true });
+        setAdminPrompt(false);
+        showToast('Admin tools unlocked.');
+      } else {
+        finishLogin({ member: null, role: 'admin', adminUnlocked: true, name: 'Admin' });
+      }
+      setAdminKey('');
+      setAdminKeyConfirm('');
+      setAdminError('');
+    } catch (e) {
+      setAdminError('Could not check the Admin Master Key on this device.');
+    } finally {
+      setAdminBusy(false);
+    }
+  };
+
+  const openMemberEdit = (member) => {
+    setEditingMember(member);
+    setEditRole(member.role || 'member');
+    setEditStatus(member.status || 'active');
+    setEditValidUntil(member.valid_until || '');
+    setEditReset(false);
+    setConfirmPurgeMember(false);
+  };
+
+  const closeMemberEdit = () => {
+    setEditingMember(null);
+    setConfirmPurgeMember(false);
+  };
+
+  const handleSaveMember = async () => {
+    if (!editingMember) return;
+    const res = updateMember(db, {
+      token: editingMember.token,
+      role: editRole,
+      status: editStatus,
+      valid_until: editValidUntil,
+      resetBalance: editReset,
+      operator: operatorName,
+      operatorRole,
+      session,
+    });
+    if (!res.ok) {
+      showToast(res.error);
+      return;
+    }
+    await updateState(res.nextState);
+    if (session?.member?.token === editingMember.token) {
+      const updated = res.member;
+      const stillActive = updated.status === 'active';
+      const stillWorking = ['admin', 'officer', 'encrypts'].includes(updated.role);
+      if (!stillActive || !stillWorking) {
+        lockApp();
+        showToast('Your member record changed. Please sign in again.');
+        return;
+      }
+      setSession({ ...session, member: updated, role: updated.role });
+      if (!can({ ...session, member: updated, role: updated.role }, `${activeTab}_tab`)) {
+        setActiveTab('printing');
+      }
+    }
+    closeMemberEdit();
+    showToast('Member updated.');
+  };
+
+  const handleExpireSemester = async () => {
+    const res = expireSemester(db, {
+      keepToken: session?.member?.token,
+      operator: operatorName,
+      operatorRole,
+      session,
+    });
+    if (!res.ok) {
+      showToast(res.error);
+      return;
+    }
+    await updateState(res.nextState);
+    setConfirmExpire(false);
+    showToast(
+      res.count
+        ? `Semester ended. ${res.count} member${res.count === 1 ? '' : 's'} set to expired.`
+        : 'No active members to expire.'
+    );
+  };
+
+  const handlePurgeAll = async () => {
+    const res = purgeExpiredData(db, {
+      keepToken: session?.member?.token,
+      operator: operatorName,
+      operatorRole,
+      session,
+    });
+    if (!res.ok) {
+      showToast(res.error);
+      return;
+    }
+    await updateState(res.nextState);
+    setConfirmPurgeAll(false);
+    setMemberQuery('');
+    showToast(
+      res.count
+        ? `Purged ${res.count} student record${res.count === 1 ? '' : 's'}.`
+        : 'No records are past their retention date.'
+    );
+  };
+
+  const handlePurgeMember = async () => {
+    if (!editingMember) return;
+    const res = purgeMember(db, editingMember.token, {
+      operator: operatorName,
+      operatorRole,
+      session,
+    });
+    if (!res.ok) {
+      showToast(res.error);
+      return;
+    }
+    await updateState(res.nextState);
+    closeMemberEdit();
+    showToast('Student data purged. Personal details were removed from this phone.');
+  };
+
+  const filteredMembers = Object.values(members)
+    .filter((member) => {
+      const q = memberQuery.trim().toLowerCase();
+      if (q) {
+        const hit =
+          (member.full_name && member.full_name.toLowerCase().includes(q)) ||
+          (member.student_no && String(member.student_no).toLowerCase().includes(q)) ||
+          (member.token && String(member.token).toLowerCase().includes(q));
+        if (!hit) return false;
+      }
+      if (memberFilter === 'expired') return member.status === 'expired';
+      if (memberFilter === 'topurge') return isRetentionPast(member);
+      return true;
+    })
+    .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
 
   const handleOfficePick = (member, manual = true) => {
     const res = officeTap(db, {
       token: member.token,
       studentNo: member.student_no,
       note: manual ? '[manual]' : '',
+      operator: operatorName,
+      operatorRole,
+      session,
     });
     if (!res.ok) {
       setLastOffice({ ok: false, error: res.error });
@@ -596,6 +1028,9 @@ export default function App() {
       studentNo: member.student_no,
       amount,
       note: cleanNote,
+      operator: operatorName,
+      operatorRole,
+      session,
     });
     if (!res.ok) {
       setLastPrint({ ok: false, error: res.error });
@@ -614,6 +1049,9 @@ export default function App() {
       note: note.trim(),
       name: guestName,
       studentNo: guestId,
+      operator: operatorName,
+      operatorRole,
+      session,
     });
     if (!res.ok) {
       setLastPrint({ ok: false, error: res.error });
@@ -654,7 +1092,7 @@ export default function App() {
   };
 
   const handleUndo = (logId) => {
-    const res = undoLastPrint(db, logId);
+    const res = undoLastPrint(db, logId, session);
     if (!res.ok) {
       showToast(res.error);
       return;
@@ -701,6 +1139,7 @@ export default function App() {
       logId: editingLog.id,
       newAmount: editAmount,
       newNote: editNote,
+      session,
     });
     if (!res.ok) {
       showToast(res.error);
@@ -717,7 +1156,7 @@ export default function App() {
 
   const handleVoidRefund = () => {
     if (!editingLog) return;
-    const res = voidPrintLog(db, editingLog.id);
+    const res = voidPrintLog(db, editingLog.id, session);
     if (!res.ok) {
       showToast(res.error);
       return;
@@ -734,6 +1173,10 @@ export default function App() {
   };
 
   const handleSync = () => {
+    if (!can(session, 'sync')) {
+      showToast('You do not have permission to sync.');
+      return;
+    }
     if (!db.settings.sheet_url || !db.settings.secret) {
       showToast('Add the receiver URL and secret key in settings first.');
       return;
@@ -744,6 +1187,704 @@ export default function App() {
   const notReady = (label) => {
     showToast(`${label} is not connected in this build.`);
   };
+
+  const renderUnlockCard = (title, text) => (
+    <Card>
+      <View style={styles.gate}>
+        <Text style={styles.gateIcon}>🔐</Text>
+        <Text style={styles.gateTitle}>{title}</Text>
+        <Text style={styles.gateText}>{text}</Text>
+        <TouchableOpacity
+          style={[styles.btn, { alignSelf: 'stretch', marginTop: 8 }]}
+          onPress={openAdminPrompt}
+          accessibilityRole="button"
+        >
+          <Text style={styles.btnText}>Enter Admin Master Key</Text>
+        </TouchableOpacity>
+      </View>
+    </Card>
+  );
+
+  const renderLogin = () => {
+    const previewMembers = Object.values(members)
+      .filter(
+        (member) =>
+          member.status === 'active' &&
+          ['admin', 'officer', 'encrypts'].includes(member.role || 'member')
+      )
+      .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
+
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar barStyle="light-content" />
+        <ScrollView
+          style={styles.body}
+          contentContainerStyle={styles.loginScroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.loginBrand}>
+            <View style={styles.loginLogo}>
+              <Text style={styles.loginLogoText}>CS</Text>
+            </View>
+            <Text style={styles.loginTitle}>CSSO Officer</Text>
+            <Text style={styles.loginSub}>
+              Tap your officer or encrypts ID to start. Every action is recorded under your
+              name.
+            </Text>
+            <View style={styles.loginStatusRow}>
+              <TouchableOpacity
+                style={[styles.pill, isOnline && styles.pillOn]}
+                onPress={() =>
+                  showToast(
+                    isOnline
+                      ? 'Online. Ready to sync.'
+                      : 'Working offline. Logs stay on this phone.'
+                  )
+                }
+                accessibilityRole="button"
+              >
+                <View style={styles.dot} />
+                <Text style={styles.pillText}>{isOnline ? 'Online' : 'Offline'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.loginTap, loginBusy && { opacity: 0.6 }]}
+            activeOpacity={0.85}
+            onPress={handleLoginScan}
+            disabled={loginBusy}
+            accessibilityRole="button"
+          >
+            <View style={styles.tapGlow} />
+            <View style={styles.tapRingOuter}>
+              <View style={styles.tapRingMid}>
+                <View style={styles.tapRingInner}>
+                  <Text style={styles.tapRingText}>NFC</Text>
+                </View>
+              </View>
+            </View>
+            <Text style={styles.tapTitle}>
+              {loginBusy ? 'Reading ID card…' : 'Tap officer or encrypts ID'}
+            </Text>
+            <Text style={styles.tapSub}>Hold the card near the top of the phone</Text>
+            <View style={{ alignSelf: 'stretch', marginTop: 14 }}>
+              <View style={styles.loginRule}>
+                <View style={styles.loginRuleDot} />
+                <Text style={styles.loginRuleText}>
+                  Officer ID → Office, Printing, Members, Issue ID, Data
+                </Text>
+              </View>
+              <View style={styles.loginRule}>
+                <View style={styles.loginRuleDot} />
+                <Text style={styles.loginRuleText}>
+                  Encrypts ID → Printing and Data sync only
+                </Text>
+              </View>
+              <View style={styles.loginRule}>
+                <View style={styles.loginRuleDot} />
+                <Text style={styles.loginRuleText}>Member ID → access denied</Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+
+          {Platform.OS === 'web' ? (
+            <Card>
+              <SectionTitle>Browser preview: pick a test card</SectionTitle>
+              <Text style={styles.muted}>
+                NFC is not available in the browser. This uses the same sign-in path as a
+                real card tap.
+              </Text>
+              {previewMembers.length ? (
+                previewMembers.map((member) => (
+                  <TouchableOpacity
+                    key={member.token}
+                    style={styles.hit}
+                    onPress={() => handleLoginToken(member.token)}
+                    accessibilityRole="button"
+                  >
+                    <View style={styles.hitInfo}>
+                      <Text style={styles.hitName} numberOfLines={1}>
+                        {member.full_name}
+                      </Text>
+                      <Text style={styles.hitMeta} numberOfLines={1}>
+                        {member.student_no || '—'} · {roleLabel(member.role)} · active
+                      </Text>
+                    </View>
+                    <View style={styles.btnSm}>
+                      <Text style={styles.btnSmText}>Tap</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text style={styles.empty}>
+                  No active working member on this phone. Set the Admin Master Key to sign
+                  in for setup.
+                </Text>
+              )}
+            </Card>
+          ) : null}
+
+          <TouchableOpacity
+            style={[styles.btn, styles.loginKey]}
+            onPress={openAdminPrompt}
+            accessibilityRole="button"
+          >
+            <Text style={styles.loginKeyText}>
+              {hasAdminKey ? 'Admin Master Key Login' : 'Set Admin Master Key'}
+            </Text>
+          </TouchableOpacity>
+
+          <Text style={styles.loginNote}>
+            Regular members cannot sign in. They receive printing only. The app locks when
+            it goes to the background.
+          </Text>
+
+          {!hasAdminKey ? (
+            <View style={styles.note}>
+              <Text style={styles.noteText}>
+                First-time setup: set the Admin Master Key to unlock initial CSV setup. Lost
+                NFC card or empty DB? The same key grants direct Admin sign-in without a
+                tap.
+              </Text>
+            </View>
+          ) : null}
+        </ScrollView>
+
+        {toast ? (
+          <View style={styles.toast} pointerEvents="none">
+            <Text style={styles.toastText}>{toast}</Text>
+          </View>
+        ) : null}
+        {renderAdminPrompt()}
+      </SafeAreaView>
+    );
+  };
+
+  const renderMembers = () => {
+    if (!can(session, 'members')) {
+      return renderUnlockCard(
+        'Admin tools locked',
+        'Member status, semester rollover, data retention, and role changes need the Admin Master Key.'
+      );
+    }
+
+    return (
+      <>
+        <Card>
+          <SectionTitle
+            right={<Text style={styles.muted}>{memberCount} members</Text>}
+          >
+            Semester & data retention actions
+          </SectionTitle>
+          <Text style={styles.muted}>
+            End semester sets every active member to expired except you. Purge removes
+            personal data after the retention date.
+          </Text>
+          <TouchableOpacity
+            style={[styles.btn, styles.btnDanger, { marginTop: 10 }]}
+            onPress={() => {
+              setConfirmExpire(true);
+              setConfirmPurgeAll(false);
+            }}
+            accessibilityRole="button"
+          >
+            <Text style={styles.btnDangerText}>End Sem: Expire All Active</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.btn, styles.btnDanger, { marginTop: 8 }]}
+            onPress={() => {
+              setConfirmPurgeAll(true);
+              setConfirmExpire(false);
+            }}
+            accessibilityRole="button"
+          >
+            <Text style={styles.btnDangerText}>
+              Purge Past Valid-Until ({purgeCount})
+            </Text>
+          </TouchableOpacity>
+
+          {confirmExpire ? (
+            <View style={styles.confirm}>
+              <Text style={styles.confirmText}>
+                Expire every active member? Your own record stays active so you are not
+                locked out. Audit rows will be added and synced.
+              </Text>
+              <View style={styles.confirmRow}>
+                <TouchableOpacity
+                  style={[styles.btn, styles.btnAlt, styles.modalBtn]}
+                  onPress={() => setConfirmExpire(false)}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.btnAltText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.btn, styles.btnDanger, styles.modalBtn]}
+                  onPress={handleExpireSemester}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.btnDangerText}>Expire Semester</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+
+          {confirmPurgeAll ? (
+            <View style={styles.confirm}>
+              <Text style={styles.confirmText}>
+                Permanently delete {purgeCount} student record
+                {purgeCount === 1 ? '' : 's'} past their retention date? Names and student
+                numbers in local logs are replaced with “Purged member”.
+              </Text>
+              <View style={styles.confirmRow}>
+                <TouchableOpacity
+                  style={[styles.btn, styles.btnAlt, styles.modalBtn]}
+                  onPress={() => setConfirmPurgeAll(false)}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.btnAltText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.btn, styles.btnDanger, styles.modalBtn]}
+                  onPress={handlePurgeAll}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.btnDangerText}>Purge Data</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+        </Card>
+
+        <Card>
+          <SectionTitle
+            right={
+              <Text style={styles.muted}>
+                {filteredMembers.length} shown
+              </Text>
+            }
+          >
+            Search & filter members
+          </SectionTitle>
+          <View style={styles.searchRow}>
+            <TextInput
+              style={[styles.input, styles.searchInput]}
+              placeholder="Search name, student no, or token…"
+              placeholderTextColor={C.teal}
+              value={memberQuery}
+              onChangeText={setMemberQuery}
+              autoCorrect={false}
+            />
+          </View>
+          <View style={styles.chipRow}>
+            {[
+              ['all', 'All'],
+              ['expired', 'Expired'],
+              ['topurge', 'To purge'],
+            ].map(([key, label]) => (
+              <TouchableOpacity
+                key={key}
+                style={[styles.chip, memberFilter === key && styles.chipOn]}
+                onPress={() => setMemberFilter(key)}
+                accessibilityRole="button"
+              >
+                <Text
+                  style={[styles.chipText, memberFilter === key && styles.chipOnText]}
+                >
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {filteredMembers.length ? (
+            filteredMembers.map((member) => {
+              const past = isRetentionPast(member);
+              const status = member.status || 'active';
+              const statusStyle =
+                status === 'expired'
+                  ? styles.tagExpired
+                  : status === 'inactive'
+                    ? styles.tagInactive
+                    : styles.tagActive;
+              const statusTextStyle =
+                status === 'expired'
+                  ? styles.tagExpiredText
+                  : status === 'inactive'
+                    ? styles.tagInactiveText
+                    : styles.tagActiveText;
+              return (
+                <View
+                  key={member.token}
+                  style={[styles.memberRow, past && styles.memberRowPast]}
+                >
+                  <TouchableOpacity
+                    style={styles.memberTop}
+                    onPress={() => openMemberEdit(member)}
+                    accessibilityRole="button"
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.memberName} numberOfLines={1}>
+                        {member.full_name || 'Unnamed member'}
+                      </Text>
+                      <Text style={styles.memberMeta} numberOfLines={1}>
+                        {member.student_no || '—'} · Token{' '}
+                        {member.token
+                          ? `${member.token.slice(0, 6)}…${member.token.slice(-4)}`
+                          : '—'}
+                        {member.tag_locked ? ' · Locked' : ''}
+                      </Text>
+                      <View style={styles.memberTags}>
+                        <Tag style={styles.tagRole} textStyle={styles.tagRoleText}>
+                          {roleLabel(member.role)}
+                        </Tag>
+                        <Tag style={statusStyle} textStyle={statusTextStyle}>
+                          {statusLabel(status)}
+                        </Tag>
+                      </View>
+                      <Text style={styles.memberBalance}>
+                        Print balance: ₱{Number(member.print_balance || 0).toFixed(2)}
+                      </Text>
+                      <Text
+                        style={past ? styles.retentionWarn : styles.retentionOk}
+                      >
+                        Retention: {member.valid_until || 'not set'}
+                        {past ? ' · PASSED, eligible for purge' : ''}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                  <View style={styles.memberActions}>
+                    <TouchableOpacity
+                      style={[styles.btnSm, styles.btnSmAlt, styles.memberAction]}
+                      onPress={() => openMemberEdit(member)}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.btnSmAltText}>Edit</Text>
+                    </TouchableOpacity>
+                    {past ? (
+                      <TouchableOpacity
+                        style={[styles.btnSm, styles.btnDanger, styles.memberAction]}
+                        onPress={() => {
+                          openMemberEdit(member);
+                          setConfirmPurgeMember(true);
+                        }}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.btnDangerText}>Purge data</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })
+          ) : (
+            <Text style={styles.empty}>
+              No members match. Try a different search or filter.
+            </Text>
+          )}
+        </Card>
+      </>
+    );
+  };
+
+  const renderAdminPrompt = () => (
+    <Modal
+      visible={adminPrompt}
+      transparent
+      animationType="fade"
+      onRequestClose={() => {
+        setAdminPrompt(false);
+        setAdminKey('');
+        setAdminKeyConfirm('');
+        setAdminError('');
+      }}
+    >
+      <View style={styles.modal}>
+        <Pressable
+          style={styles.backdrop}
+          onPress={() => {
+            setAdminPrompt(false);
+            setAdminKey('');
+            setAdminKeyConfirm('');
+            setAdminError('');
+          }}
+        />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.sheetWrap}
+        >
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <ScrollView keyboardShouldPersistTaps="handled">
+              <Text style={styles.modalTitle}>
+                {hasAdminKey ? 'Admin verification' : 'Set Admin Master Key'}
+              </Text>
+              <Text style={styles.modalSub}>
+                {session
+                  ? `Signed in as ${operatorName} (${roleLabel(session.role)})`
+                  : 'Emergency / first-time setup'}
+              </Text>
+              <Text style={styles.muted}>
+                {hasAdminKey
+                  ? 'Enter the Admin Master Key to unlock Member Status, Sem Rollover, Issue ID, and Settings.'
+                  : 'There is only one key in this app. It unlocks member management, semester rollover, Issue ID, CSV imports, and Settings.'}
+              </Text>
+
+              <Text style={styles.label}>Admin Master Key</Text>
+              <TextInput
+                style={styles.input}
+                value={adminKey}
+                onChangeText={(value) => {
+                  setAdminKey(value);
+                  setAdminError('');
+                }}
+                placeholder="Enter key"
+                placeholderTextColor={C.teal}
+                secureTextEntry
+                autoCapitalize="none"
+                autoFocus
+              />
+              {!hasAdminKey ? (
+                <>
+                  <Text style={styles.label}>Confirm key</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={adminKeyConfirm}
+                    onChangeText={(value) => {
+                      setAdminKeyConfirm(value);
+                      setAdminError('');
+                    }}
+                    placeholder="Repeat key"
+                    placeholderTextColor={C.teal}
+                    secureTextEntry
+                    autoCapitalize="none"
+                  />
+                  <Text style={styles.muted}>
+                    Use at least 8 characters. It is stored only as a salted SHA-256 hash
+                    on this phone.
+                  </Text>
+                </>
+              ) : null}
+
+              {adminError ? <Text style={styles.errText}>{adminError}</Text> : null}
+
+              <View style={styles.modalBtns}>
+                <TouchableOpacity
+                  style={[styles.btn, styles.btnAlt, styles.modalBtn]}
+                  onPress={() => {
+                    setAdminPrompt(false);
+                    setAdminKey('');
+                    setAdminKeyConfirm('');
+                    setAdminError('');
+                  }}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.btnAltText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.btn, styles.modalBtn, adminBusy && { opacity: 0.6 }]}
+                  onPress={handleAdminSubmit}
+                  disabled={adminBusy}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.btnText}>
+                    {adminBusy
+                      ? 'Checking…'
+                      : hasAdminKey
+                        ? 'Unlock Admin'
+                        : 'Set Key & Unlock'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.adminKeyBox}>
+                <Text style={styles.adminKeyText}>
+                  Five wrong tries lock the key pad for one minute. Lost NFC card or empty
+                  DB? The Master Key also grants direct Admin sign-in without an NFC tap.
+                </Text>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+  );
+
+  const renderMemberEditModal = () => (
+    <Modal
+      visible={!!editingMember}
+      transparent
+      animationType="slide"
+      onRequestClose={closeMemberEdit}
+    >
+      <View style={styles.modal}>
+        <Pressable style={styles.backdrop} onPress={closeMemberEdit} />
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.sheetWrap}
+        >
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+            <ScrollView keyboardShouldPersistTaps="handled">
+              {editingMember ? (
+                <>
+                  <Text style={styles.modalTitle}>Edit member status & role</Text>
+                  <Text style={styles.modalSub}>
+                    {editingMember.full_name || 'Unnamed member'} (
+                    {editingMember.student_no || '—'})
+                  </Text>
+                  <Text style={styles.muted}>
+                    Token: {editingMember.token || '—'} · Locked:{' '}
+                    {editingMember.tag_locked ? 'Yes' : 'No'}
+                  </Text>
+
+                  <Text style={styles.label}>Org role (all are members)</Text>
+                  <View style={styles.chipRow}>
+                    {ROLES.map((roleKey) => (
+                      <TouchableOpacity
+                        key={roleKey}
+                        style={[styles.chip, editRole === roleKey && styles.chipOn]}
+                        onPress={() => setEditRole(roleKey)}
+                        accessibilityRole="button"
+                      >
+                        <Text
+                          style={[
+                            styles.chipText,
+                            editRole === roleKey && styles.chipOnText,
+                          ]}
+                        >
+                          {roleLabel(roleKey)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <Text style={styles.label}>Sem membership status</Text>
+                  <View style={styles.chipRow}>
+                    {STATUSES.map((statusKey) => (
+                      <TouchableOpacity
+                        key={statusKey}
+                        style={[styles.chip, editStatus === statusKey && styles.chipOn]}
+                        onPress={() => {
+                          setEditStatus(statusKey);
+                          if (statusKey !== 'active') setEditReset(false);
+                        }}
+                        accessibilityRole="button"
+                      >
+                        <Text
+                          style={[
+                            styles.chipText,
+                            editStatus === statusKey && styles.chipOnText,
+                          ]}
+                        >
+                          {statusLabel(statusKey)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+
+                  <View style={styles.switchRow}>
+                    <View style={styles.switchCopy}>
+                      <Text style={styles.switchTitle}>
+                        Reset print balance to ₱40.00
+                      </Text>
+                      <Text style={styles.switchSub}>
+                        {editStatus === 'active'
+                          ? 'Use on semester renewal.'
+                          : 'Set status to Active first.'}
+                      </Text>
+                    </View>
+                    <Switch
+                      value={editReset}
+                      onValueChange={setEditReset}
+                      disabled={editStatus !== 'active'}
+                      trackColor={{ false: C.line, true: C.teal }}
+                      thumbColor={editReset ? C.mint : '#f4f3f4'}
+                    />
+                  </View>
+
+                  <Text style={styles.label}>Data retention (valid_until)</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={editValidUntil}
+                    onChangeText={setEditValidUntil}
+                    placeholder="YYYY-MM-DD"
+                    placeholderTextColor={C.teal}
+                    autoCapitalize="none"
+                  />
+                  <Text style={styles.muted}>
+                    Keep data until {editValidUntil || 'not set'}. Today is {today()}.
+                    {editValidUntil && editValidUntil < today()
+                      ? ' This record is eligible for purge.'
+                      : ' Purge unlocks after this date.'}
+                  </Text>
+
+                  <View style={styles.modalBtns}>
+                    <TouchableOpacity
+                      style={[styles.btn, styles.btnAlt, styles.modalBtn]}
+                      onPress={closeMemberEdit}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.btnAltText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.btn, styles.modalBtn]}
+                      onPress={handleSaveMember}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.btnText}>Save Changes</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {isRetentionPast(editingMember) ? (
+                    <TouchableOpacity
+                      style={[styles.btn, styles.btnDanger, { marginTop: 10 }]}
+                      onPress={() => setConfirmPurgeMember(true)}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.btnDangerText}>
+                        Delete Student Data Now
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text style={[styles.muted, { marginTop: 10 }]}>
+                      Delete Student Data Now unlocks after the retention date.
+                    </Text>
+                  )}
+
+                  {confirmPurgeMember ? (
+                    <View style={styles.confirm}>
+                      <Text style={styles.confirmText}>
+                        Delete {editingMember.full_name || 'this student'}’s personal data?
+                        This removes the member record and replaces their name and student
+                        number in local logs with “Purged member”.
+                      </Text>
+                      <View style={styles.confirmRow}>
+                        <TouchableOpacity
+                          style={[styles.btn, styles.btnAlt, styles.modalBtn]}
+                          onPress={() => setConfirmPurgeMember(false)}
+                          accessibilityRole="button"
+                        >
+                          <Text style={styles.btnAltText}>Cancel</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.btn, styles.btnDanger, styles.modalBtn]}
+                          onPress={handlePurgeMember}
+                          accessibilityRole="button"
+                        >
+                          <Text style={styles.btnDangerText}>Purge Data</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </View>
+    </Modal>
+  );
 
   const renderOfficeResult = () => {
     if (!lastOffice) {
@@ -1109,6 +2250,10 @@ export default function App() {
   );
 
   const handleIssue = () => {
+    if (!can(session, 'issue')) {
+      showToast('Admin Master Key required to issue stickers.');
+      return;
+    }
     if (issueMode === 'new' && !issueName.trim()) {
       showToast('Enter the member name first.');
       return;
@@ -1125,7 +2270,14 @@ export default function App() {
       ? issueMember?.token || '<select a member>'
       : '<new token>';
 
-  const renderIssue = () => (
+  const renderIssue = () => {
+    if (!can(session, 'issue')) {
+      return renderUnlockCard(
+        'Issue ID is locked',
+        'Writing and locking stickers needs the Admin Master Key. Test on spare stickers first.'
+      );
+    }
+    return (
     <>
       <Card>
         <SectionTitle>Issue a sticker</SectionTitle>
@@ -1312,10 +2464,18 @@ export default function App() {
         </View>
       </Card>
     </>
-  );
+    );
+  };
 
   const renderData = () => (
     <>
+      {!can(session, 'settings') && can(session, 'members_tab')
+        ? renderUnlockCard(
+            'Admin settings locked',
+            'Receiver URL, secret, link prefix, and member CSV import need the Admin Master Key.'
+          )
+        : null}
+      {can(session, 'settings') ? (
       <Card>
         <SectionTitle>Officer & sync settings</SectionTitle>
         <Text style={styles.label}>Officer name</Text>
@@ -1358,6 +2518,7 @@ export default function App() {
           Must start with https:// and end with ?t= or /t/.
         </Text>
       </Card>
+      ) : null}
 
       <Card>
         <SectionTitle>Cloud sync</SectionTitle>
@@ -1385,39 +2546,47 @@ export default function App() {
 
       <Card>
         <SectionTitle>CSV import & export</SectionTitle>
-        <TouchableOpacity
-          style={[styles.btn, styles.btnBlock]}
-          onPress={() => notReady('Member CSV import')}
-          accessibilityRole="button"
-        >
-          <Text style={styles.btnText}>Import members CSV</Text>
-        </TouchableOpacity>
+        {can(session, 'import') ? (
+          <TouchableOpacity
+            style={[styles.btn, styles.btnBlock]}
+            onPress={() => notReady('Member CSV import')}
+            accessibilityRole="button"
+          >
+            <Text style={styles.btnText}>Import members CSV</Text>
+          </TouchableOpacity>
+        ) : null}
         <View style={styles.csvRow}>
-          <TouchableOpacity
-            style={[styles.btn, styles.btnAlt, styles.csvBtn]}
-            onPress={() => notReady('Export new records')}
-            accessibilityRole="button"
-          >
-            <Text style={styles.btnAltText}>Export new records</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.btn, styles.btnAlt, styles.csvBtn]}
-            onPress={() => notReady('Export recent logs')}
-            accessibilityRole="button"
-          >
-            <Text style={styles.btnAltText}>Export recent logs</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.btn, styles.btnAlt, styles.csvBtn]}
-            onPress={() => notReady('Export members CSV')}
-            accessibilityRole="button"
-          >
-            <Text style={styles.btnAltText}>Export members CSV</Text>
-          </TouchableOpacity>
+          {can(session, 'export_new') ? (
+            <TouchableOpacity
+              style={[styles.btn, styles.btnAlt, styles.csvBtn]}
+              onPress={() => notReady('Export new records')}
+              accessibilityRole="button"
+            >
+              <Text style={styles.btnAltText}>Export new records</Text>
+            </TouchableOpacity>
+          ) : null}
+          {can(session, 'export_recent') ? (
+            <TouchableOpacity
+              style={[styles.btn, styles.btnAlt, styles.csvBtn]}
+              onPress={() => notReady('Export recent logs')}
+              accessibilityRole="button"
+            >
+              <Text style={styles.btnAltText}>Export recent logs</Text>
+            </TouchableOpacity>
+          ) : null}
+          {can(session, 'export_members') ? (
+            <TouchableOpacity
+              style={[styles.btn, styles.btnAlt, styles.csvBtn]}
+              onPress={() => notReady('Export members CSV')}
+              accessibilityRole="button"
+            >
+              <Text style={styles.btnAltText}>Export members CSV</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
         <Text style={styles.muted}>
           Safe import keeps each phone’s local balances. Avoid “replace all” on phones that
-          are already offline.
+          are already offline. Encrypts can export new records only.
         </Text>
       </Card>
 
@@ -1553,6 +2722,8 @@ export default function App() {
     </Modal>
   );
 
+  if (!session) return renderLogin();
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" />
@@ -1563,7 +2734,11 @@ export default function App() {
         <View style={styles.headerCopy}>
           <Text style={styles.headerTitle}>CSSO Officer</Text>
           <Text style={styles.headerSub} numberOfLines={1}>
-            {db.settings.officer || 'Officer'} · {roleLabel(role)}
+            {session.member
+              ? `${operatorName} · ${roleLabel(operatorRole)}${
+                  isAdminUnlocked ? ' · Admin unlocked' : ''
+                }`
+              : 'Admin Master Key · Admin'}
           </Text>
         </View>
         <View style={styles.headerRight}>
@@ -1581,8 +2756,17 @@ export default function App() {
             <View style={styles.dot} />
             <Text style={styles.pillText}>{isOnline ? 'Online' : 'Offline'}</Text>
           </TouchableOpacity>
-          <View style={styles.unsynced}>
-            <Text style={styles.unsyncedText}>{unsyncedCount} unsynced</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={styles.unsynced}>
+              <Text style={styles.unsyncedText}>{unsyncedCount} unsynced</Text>
+            </View>
+            <TouchableOpacity
+              style={styles.lockChip}
+              onPress={lockApp}
+              accessibilityRole="button"
+            >
+              <Text style={styles.lockChipText}>Lock</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>
@@ -1592,15 +2776,20 @@ export default function App() {
         contentContainerStyle={styles.main}
         keyboardShouldPersistTaps="handled"
       >
-        {activeTab === 'office' ? renderOffice() : null}
-        {activeTab === 'printing' ? renderPrinting() : null}
-        {activeTab === 'issue' ? renderIssue() : null}
-        {activeTab === 'data' ? renderData() : null}
+        {activeTab === 'office' && can(session, 'office') ? renderOffice() : null}
+        {activeTab === 'printing' && can(session, 'printing')
+          ? renderPrinting()
+          : null}
+        {activeTab === 'members' && can(session, 'members_tab')
+          ? renderMembers()
+          : null}
+        {activeTab === 'issue' && can(session, 'issue_tab') ? renderIssue() : null}
+        {activeTab === 'data' && can(session, 'data') ? renderData() : null}
       </ScrollView>
 
       {!editingLog ? (
         <View style={styles.nav}>
-          {TABS.map((tab) => (
+          {visibleTabs.map((tab) => (
             <TouchableOpacity
               key={tab.key}
               style={[styles.navBtn, activeTab === tab.key && styles.navOn]}
@@ -1630,6 +2819,8 @@ export default function App() {
       ) : null}
 
       {renderEditModal()}
+      {renderMemberEditModal()}
+      {renderAdminPrompt()}
     </SafeAreaView>
   );
 }
