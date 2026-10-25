@@ -31,12 +31,11 @@ import {
   purgeMember,
   saveDB,
   searchMembers,
-  setAdminKey as storeAdminKey,
   signInWithToken,
   todayManila,
   undoLastPrint,
   updateMember,
-  verifyAdminKey,
+  verifyAdminMasterKey,
   voidPrintLog,
 } from './src/core';
 
@@ -615,7 +614,6 @@ export default function App() {
 
   const [adminPrompt, setAdminPrompt] = useState(false);
   const [adminKey, setAdminKey] = useState('');
-  const [adminKeyConfirm, setAdminKeyConfirm] = useState('');
   const [adminError, setAdminError] = useState('');
   const [adminBusy, setAdminBusy] = useState(false);
 
@@ -673,7 +671,6 @@ export default function App() {
         setActiveTab('office');
         setAdminPrompt(false);
         setAdminKey('');
-        setAdminKeyConfirm('');
         setAdminError('');
         setEditingMember(null);
         setEditingLog(null);
@@ -711,7 +708,9 @@ export default function App() {
   const logs = db.logs || [];
   const unsyncedCount = logs.filter((log) => !log.synced).length;
   const memberCount = Object.keys(members).length;
-  const hasAdminKey = Boolean(db.settings.admin_key_hash && db.settings.admin_key_salt);
+  // The Admin Master Key is a fixed, pre-computed salted SHA-256 digest (see core.js).
+// Only the hash is known; the plaintext password is never stored on the phone.
+const hasAdminKey = true;
   const operatorName = session?.member
     ? session.member.full_name || session.member.student_no || 'Officer'
     : session?.name || 'Admin';
@@ -825,35 +824,10 @@ export default function App() {
 
   const handleAdminSubmit = async () => {
     if (adminBusy) return;
-    if (!hasAdminKey && adminKey !== adminKeyConfirm) {
-      setAdminError('The two keys do not match.');
-      return;
-    }
 
     setAdminBusy(true);
     try {
-      if (!hasAdminKey) {
-        const res = await storeAdminKey(db, adminKey);
-        if (!res.ok) {
-          setAdminError(res.error);
-          return;
-        }
-        await updateState(res.nextState);
-        if (session) {
-          setSession({ ...session, adminUnlocked: true });
-          showToast('Admin Master Key set. Admin tools unlocked.');
-        } else {
-          finishLogin({ member: null, role: 'admin', adminUnlocked: true, name: 'Admin' });
-        }
-        setAdminPrompt(false);
-        setAdminKey('');
-        setAdminKeyConfirm('');
-        setAdminError('');
-        return;
-      }
-
-      const res = await verifyAdminKey(db, adminKey);
-      if (res.nextState && res.nextState !== db) await updateState(res.nextState);
+      const res = await verifyAdminMasterKey(adminKey, db, saveDB);
       if (!res.ok) {
         setAdminError(res.error);
         return;
@@ -866,9 +840,9 @@ export default function App() {
         finishLogin({ member: null, role: 'admin', adminUnlocked: true, name: 'Admin' });
       }
       setAdminKey('');
-      setAdminKeyConfirm('');
       setAdminError('');
     } catch (e) {
+      console.error('ADMIN_KEY_ERROR', e && e.message);
       setAdminError('Could not check the Admin Master Key on this device.');
     } finally {
       setAdminBusy(false);
@@ -1331,24 +1305,22 @@ export default function App() {
             accessibilityRole="button"
           >
             <Text style={styles.loginKeyText}>
-              {hasAdminKey ? 'Admin Master Key Login' : 'Set Admin Master Key'}
+              'Admin Master Key Login'
             </Text>
           </TouchableOpacity>
 
           <Text style={styles.loginNote}>
             Regular members cannot sign in. They receive printing only. The app locks when
-            it goes to the background.
+            it goes to the background. Only a salted SHA-256 hash of the Admin Master Key is
+            stored on this phone.
           </Text>
 
-          {!hasAdminKey ? (
-            <View style={styles.note}>
-              <Text style={styles.noteText}>
-                First-time setup: set the Admin Master Key to unlock initial CSV setup. Lost
-                NFC card or empty DB? The same key grants direct Admin sign-in without a
-                tap.
-              </Text>
-            </View>
-          ) : null}
+          <View style={styles.note}>
+            <Text style={styles.noteText}>
+              Lost NFC card or empty DB? Enter the Admin Master Key here to sign in directly
+              as Admin without an NFC tap.
+            </Text>
+          </View>
         </ScrollView>
 
         {toast ? (
@@ -1595,7 +1567,6 @@ export default function App() {
       onRequestClose={() => {
         setAdminPrompt(false);
         setAdminKey('');
-        setAdminKeyConfirm('');
         setAdminError('');
       }}
     >
@@ -1605,7 +1576,6 @@ export default function App() {
           onPress={() => {
             setAdminPrompt(false);
             setAdminKey('');
-            setAdminKeyConfirm('');
             setAdminError('');
           }}
         />
@@ -1616,18 +1586,15 @@ export default function App() {
           <View style={styles.sheet}>
             <View style={styles.sheetHandle} />
             <ScrollView keyboardShouldPersistTaps="handled">
-              <Text style={styles.modalTitle}>
-                {hasAdminKey ? 'Admin verification' : 'Set Admin Master Key'}
-              </Text>
+              <Text style={styles.modalTitle}>Admin verification</Text>
               <Text style={styles.modalSub}>
                 {session
                   ? `Signed in as ${operatorName} (${roleLabel(session.role)})`
-                  : 'Emergency / first-time setup'}
+                  : 'Emergency / direct Admin sign-in'}
               </Text>
               <Text style={styles.muted}>
-                {hasAdminKey
-                  ? 'Enter the Admin Master Key to unlock Member Status, Sem Rollover, Issue ID, and Settings.'
-                  : 'There is only one key in this app. It unlocks member management, semester rollover, Issue ID, CSV imports, and Settings.'}
+                Enter the Admin Master Key to unlock Member Status, Sem Rollover, Issue ID,
+                and Settings. Only a salted SHA-256 hash is stored on this phone.
               </Text>
 
               <Text style={styles.label}>Admin Master Key</Text>
@@ -1644,27 +1611,6 @@ export default function App() {
                 autoCapitalize="none"
                 autoFocus
               />
-              {!hasAdminKey ? (
-                <>
-                  <Text style={styles.label}>Confirm key</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={adminKeyConfirm}
-                    onChangeText={(value) => {
-                      setAdminKeyConfirm(value);
-                      setAdminError('');
-                    }}
-                    placeholder="Repeat key"
-                    placeholderTextColor={C.teal}
-                    secureTextEntry
-                    autoCapitalize="none"
-                  />
-                  <Text style={styles.muted}>
-                    Use at least 8 characters. It is stored only as a salted SHA-256 hash
-                    on this phone.
-                  </Text>
-                </>
-              ) : null}
 
               {adminError ? <Text style={styles.errText}>{adminError}</Text> : null}
 
@@ -1674,7 +1620,6 @@ export default function App() {
                   onPress={() => {
                     setAdminPrompt(false);
                     setAdminKey('');
-                    setAdminKeyConfirm('');
                     setAdminError('');
                   }}
                   accessibilityRole="button"
@@ -1688,11 +1633,7 @@ export default function App() {
                   accessibilityRole="button"
                 >
                   <Text style={styles.btnText}>
-                    {adminBusy
-                      ? 'Checking…'
-                      : hasAdminKey
-                        ? 'Unlock Admin'
-                        : 'Set Key & Unlock'}
+                    {adminBusy ? 'Checking…' : 'Unlock Admin'}
                   </Text>
                 </TouchableOpacity>
               </View>

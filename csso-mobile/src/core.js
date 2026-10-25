@@ -127,93 +127,105 @@ export async function saveDB(state) {
   }
 }
 
+// Pre-computed salted SHA-256 for the Admin Master Key. Only the digest is stored;
+// the plaintext password never enters the repo or the phone's settings.
+const ADMIN_KEY_SALT = 'csso_admin_salt_2026_v1';
+const DEFAULT_ADMIN_KEY_HASH =
+  '85369030cb9ebaed4952e007a9d6b29eeb61faaed8cc513e423c20fc527f8038';
+const MAX_ADMIN_ATTEMPTS = 5;
+const ADMIN_LOCKOUT_MS = 60 * 1000; // 1 minute
+
 function normalizeAdminKey(key) {
   return String(key || '').trim();
 }
 
-async function hashAdminKey(key, salt) {
+/**
+ * Hashes a candidate password with the salt using expo-crypto SHA-256.
+ */
+export async function hashAdminKey(plainTextKey, salt = ADMIN_KEY_SALT) {
   return Crypto.digestStringAsync(
     Crypto.CryptoDigestAlgorithm.SHA256,
-    `${salt}:${normalizeAdminKey(key)}`
+    `${salt}:${normalizeAdminKey(plainTextKey)}`
   );
 }
 
-export async function setAdminKey(state, key) {
-  const clean = normalizeAdminKey(key);
-  if (clean.length < ADMIN_KEY_MIN) {
-    return { ok: false, error: `Use at least ${ADMIN_KEY_MIN} characters.` };
+/**
+ * Constant-time string comparison so a wrong key cannot be distinguished from a
+ * right one by timing.
+ */
+function timingSafeEqualStr(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) {
+    return false;
   }
-  const salt =
-    typeof Crypto.randomUUID === 'function' ? Crypto.randomUUID() : generateUUID();
-  const hash = await hashAdminKey(clean, salt);
-  const nextState = {
-    ...state,
-    settings: {
-      ...state.settings,
-      admin_key_hash: hash,
-      admin_key_salt: salt,
-      admin_fail_count: 0,
-      admin_lock_until: 0,
-    },
-  };
-  return { ok: true, nextState };
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
 }
 
-export async function verifyAdminKey(state, key) {
+/**
+ * Verifies the Admin Master Key against the stored or default SHA-256 hash and
+ * enforces a 1-minute lockout after 5 consecutive failed attempts.
+ *
+ * @param {string} inputKey - Password typed by the officer/admin
+ * @param {object} db - Current csso_db_v1 state ({ members, logs, settings })
+ * @param {function} saveDb - Async callback to persist updated settings
+ */
+export async function verifyAdminMasterKey(inputKey, db, saveDb) {
+  const settings = db.settings || (db.settings = {});
   const now = Date.now();
-  const lockUntil = Number(state.settings.admin_lock_until || 0);
-  if (lockUntil > now) {
-    const seconds = Math.ceil((lockUntil - now) / 1000);
+
+  // Support both the current field names and the older snake_case keys.
+  const storedHash = settings.adminKeyHash || settings.admin_key_hash;
+  const storedSalt = settings.adminKeySalt || settings.admin_key_salt;
+  const storedFails = settings.adminFailedAttempts || settings.admin_fail_count || 0;
+  const storedLock = settings.adminLockUntil || settings.admin_lock_until || 0;
+
+  // 1. Still locked out from too many wrong tries.
+  if (storedLock && now < storedLock) {
+    const secsLeft = Math.ceil((storedLock - now) / 1000);
     return {
       ok: false,
-      locked: true,
-      error: `Too many attempts. Try again in ${seconds}s.`,
-      nextState: state,
-    };
-  }
-  if (!state.settings.admin_key_hash || !state.settings.admin_key_salt) {
-    return { ok: false, noKey: true, error: 'No Admin Master Key set yet.', nextState: state };
-  }
-  const clean = normalizeAdminKey(key);
-  if (!clean) {
-    return { ok: false, error: 'Enter the Admin Master Key.', nextState: state };
-  }
-  const hash = await hashAdminKey(clean, state.settings.admin_key_salt);
-  if (hash === state.settings.admin_key_hash) {
-    return {
-      ok: true,
-      nextState: {
-        ...state,
-        settings: { ...state.settings, admin_fail_count: 0, admin_lock_until: 0 },
-      },
+      error: `Too many wrong tries. Try again in ${secsLeft}s.`,
     };
   }
 
-  const fails = Number(state.settings.admin_fail_count || 0) + 1;
-  if (fails >= MAX_ADMIN_TRIES) {
+  // 2. Hash the user input with the salt and compare digests.
+  const salt = storedSalt || ADMIN_KEY_SALT;
+  const expectedHash = storedHash || DEFAULT_ADMIN_KEY_HASH;
+  const candidateHash = await hashAdminKey(inputKey || '', salt);
+
+  if (timingSafeEqualStr(candidateHash, expectedHash)) {
+    settings.adminKeyHash = expectedHash;
+    settings.adminKeySalt = salt;
+    settings.adminFailedAttempts = 0;
+    settings.adminLockUntil = 0;
+    if (saveDb) await saveDb(db);
+    return { ok: true };
+  }
+
+  // 3. Record the failed attempt and lock for 1 minute on the 5th wrong try.
+  const attempts = storedFails + 1;
+  settings.adminKeyHash = expectedHash;
+  settings.adminKeySalt = salt;
+  settings.adminFailedAttempts = attempts;
+
+  if (attempts >= MAX_ADMIN_ATTEMPTS) {
+    settings.adminLockUntil = now + ADMIN_LOCKOUT_MS;
+    settings.adminFailedAttempts = 0;
+    if (saveDb) await saveDb(db);
     return {
       ok: false,
-      locked: true,
-      error: 'Too many attempts. Locked for 1 minute.',
-      nextState: {
-        ...state,
-        settings: {
-          ...state.settings,
-          admin_fail_count: 0,
-          admin_lock_until: now + ADMIN_LOCK_MS,
-        },
-      },
+      error: '5 wrong tries. Admin login locked for 1 minute.',
     };
   }
+
+  if (saveDb) await saveDb(db);
+  const triesLeft = MAX_ADMIN_ATTEMPTS - attempts;
   return {
     ok: false,
-    error: `Wrong key. ${MAX_ADMIN_TRIES - fails} ${
-      MAX_ADMIN_TRIES - fails === 1 ? 'try' : 'tries'
-    } left.`,
-    nextState: {
-      ...state,
-      settings: { ...state.settings, admin_fail_count: fails },
-    },
+    error: `Invalid Admin Key (${triesLeft} ${triesLeft === 1 ? 'try' : 'tries'} left).`,
   };
 }
 
