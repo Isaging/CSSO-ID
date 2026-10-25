@@ -732,7 +732,7 @@ const hasAdminKey = true;
   const issueResults = searchMembers(members, issueQuery);
   const amountNumber = Math.max(0, Math.min(1000, parseFloat(amount) || 0));
   const amountLabel = amountNumber.toFixed(2);
-  const linkPrefix = db.settings.link_prefix || 'https://your-domain/t/';
+  const linkPrefix = db.settings.link_prefix || 'https://github.com/Isaging/CSSO-ID/t/';
   const purgeCount = Object.values(members).filter(
     (member) => isRetentionPast(member) && member.token !== session?.member?.token
   ).length;
