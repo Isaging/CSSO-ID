@@ -143,10 +143,18 @@ function normalizeAdminKey(key) {
  * Hashes a candidate password with the salt using expo-crypto SHA-256.
  */
 export async function hashAdminKey(plainTextKey, salt = ADMIN_KEY_SALT) {
-  return Crypto.digestStringAsync(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    `${salt}:${normalizeAdminKey(plainTextKey)}`
-  );
+  try {
+    return await Crypto.digestStringAsync(
+      Crypto.CryptoDigestAlgorithm.SHA256,
+      `${salt}:${normalizeAdminKey(plainTextKey)}`
+    );
+  } catch (e) {
+    // Fallback if Crypto module option differs on device
+    return await Crypto.digestStringAsync(
+      'SHA-256',
+      `${salt}:${normalizeAdminKey(plainTextKey)}`
+    );
+  }
 }
 
 /**
