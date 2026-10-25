@@ -623,10 +623,10 @@ export default function App() {
   const [editRole, setEditRole] = useState('member');
   const [editStatus, setEditStatus] = useState('active');
   const [editValidUntil, setEditValidUntil] = useState('');
-  const [editReset, setEditReset] = useState(false);
+  const [editAllowance, setEditAllowance] = useState('');
+  const [confirmPurgeMember, setConfirmPurgeMember] = useState(false);
   const [confirmExpire, setConfirmExpire] = useState(false);
   const [confirmPurgeAll, setConfirmPurgeAll] = useState(false);
-  const [confirmPurgeMember, setConfirmPurgeMember] = useState(false);
 
   const [amount, setAmount] = useState('15.00');
   const [note, setNote] = useState('');
@@ -854,7 +854,7 @@ const hasAdminKey = true;
     setEditRole(member.role || 'member');
     setEditStatus(member.status || 'active');
     setEditValidUntil(member.valid_until || '');
-    setEditReset(false);
+    setEditAllowance('');
     setConfirmPurgeMember(false);
   };
 
@@ -865,12 +865,19 @@ const hasAdminKey = true;
 
   const handleSaveMember = async () => {
     if (!editingMember) return;
+    const parsedAllowance =
+      editAllowance.trim() === '' ? undefined : parseFloat(editAllowance);
+    if (parsedAllowance !== undefined && (isNaN(parsedAllowance) || parsedAllowance < 0 || parsedAllowance > 1000)) {
+      showToast('Enter a valid printing allowance between ₱0 and ₱1000.');
+      return;
+    }
+
     const res = updateMember(db, {
       token: editingMember.token,
       role: editRole,
       status: editStatus,
       valid_until: editValidUntil,
-      resetBalance: editReset,
+      newBalance: parsedAllowance,
       operator: operatorName,
       operatorRole,
       session,
@@ -1724,25 +1731,48 @@ const hasAdminKey = true;
                     ))}
                   </View>
 
-                  <View style={styles.switchRow}>
-                    <View style={styles.switchCopy}>
-                      <Text style={styles.switchTitle}>
-                        Reset print balance to ₱40.00
-                      </Text>
-                      <Text style={styles.switchSub}>
-                        {editStatus === 'active'
-                          ? 'Use on semester renewal.'
-                          : 'Set status to Active first.'}
-                      </Text>
-                    </View>
-                    <Switch
-                      value={editReset}
-                      onValueChange={setEditReset}
-                      disabled={editStatus !== 'active'}
-                      trackColor={{ false: C.line, true: C.teal }}
-                      thumbColor={editReset ? C.mint : '#f4f3f4'}
-                    />
+                  <Text style={styles.label}>Custom printing allowance (optional)</Text>
+                  <View style={styles.chipRow}>
+                    <TouchableOpacity
+                      style={[styles.chip, editAllowance === '40' && styles.chipOn]}
+                      onPress={() => setEditAllowance('40')}
+                      accessibilityRole="button"
+                    >
+                      <Text style={[styles.chipText, editAllowance === '40' && styles.chipOnText]}>₱40</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.chip, editAllowance === '60' && styles.chipOn]}
+                      onPress={() => setEditAllowance('60')}
+                      accessibilityRole="button"
+                    >
+                      <Text style={[styles.chipText, editAllowance === '60' && styles.chipOnText]}>₱60</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.chip, editAllowance === '0' && styles.chipOn]}
+                      onPress={() => setEditAllowance('0')}
+                      accessibilityRole="button"
+                    >
+                      <Text style={[styles.chipText, editAllowance === '0' && styles.chipOnText]}>₱0</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.chip, editAllowance === '' && styles.chipOn]}
+                      onPress={() => setEditAllowance('')}
+                      accessibilityRole="button"
+                    >
+                      <Text style={[styles.chipText, editAllowance === '' && styles.chipOnText]}>Keep current</Text>
+                    </TouchableOpacity>
                   </View>
+                  <TextInput
+                    style={styles.input}
+                    value={editAllowance}
+                    onChangeText={setEditAllowance}
+                    placeholder="Leave blank to keep existing balance"
+                    placeholderTextColor={C.teal}
+                    keyboardType="numeric"
+                  />
+                  <Text style={styles.muted}>
+                    Set a custom balance (e.g., 60 for ₱60.00). Leave blank to keep current balance (₱{Number(editingMember.print_balance || 0).toFixed(2)}).
+                  </Text>
 
                   <Text style={styles.label}>Data retention (valid_until)</Text>
                   <TextInput

@@ -271,7 +271,7 @@ function money(value) {
 
 export function updateMember(
   state,
-  { token, role, status, valid_until, resetBalance, operator, operatorRole, session }
+  { token, role, status, valid_until, newBalance, operator, operatorRole, session }
 ) {
   if (!can(session, 'members')) {
     return { ok: false, error: 'Admin Master Key required to edit members.' };
@@ -287,12 +287,17 @@ export function updateMember(
   }
 
   const oldBalance = money(member.print_balance);
-  const newBalance = resetBalance && nextStatus === 'active' ? 40 : oldBalance;
+  // Flexible allowance: if newBalance is provided (>= 0), use it. Otherwise keep old balance.
+  const nextBalance = newBalance !== undefined ? money(newBalance) : oldBalance;
+  if (nextBalance < 0 || nextBalance > 1000) {
+    return { ok: false, error: 'Allowance must be between ₱0 and ₱1000.' };
+  }
+
   const updated = {
     ...member,
     role: nextRole,
     status: nextStatus,
-    print_balance: newBalance,
+    print_balance: nextBalance,
     valid_until: nextValid,
   };
 
@@ -304,8 +309,8 @@ export function updateMember(
   if ((member.valid_until || '') !== nextValid) {
     changes.push(`valid_until ${nextValid || 'cleared'}`);
   }
-  if (oldBalance !== newBalance) {
-    changes.push(`balance ₱${oldBalance.toFixed(2)} -> ₱${newBalance.toFixed(2)}`);
+  if (oldBalance !== nextBalance) {
+    changes.push(`balance ₱${oldBalance.toFixed(2)} -> ₱${nextBalance.toFixed(2)}`);
   }
   const note = changes.length ? changes.join('; ') : 'member details saved';
 
