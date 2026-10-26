@@ -132,7 +132,6 @@ export async function saveDB(state) {
 const ADMIN_KEY_SALT = 'csso_admin_salt_2026_v1';
 const DEFAULT_ADMIN_KEY_HASH =
   '85369030cb9ebaed4952e007a9d6b29eeb61faaed8cc513e423c20fc527f8038';
-const MAX_ADMIN_ATTEMPTS = 5;
 const ADMIN_LOCKOUT_MS = 60 * 1000; // 1 minute
 
 function normalizeAdminKey(key) {
@@ -143,17 +142,11 @@ function normalizeAdminKey(key) {
  * Hashes a candidate password with the salt using expo-crypto SHA-256.
  */
 export async function hashAdminKey(plainTextKey, salt = ADMIN_KEY_SALT) {
+  const algo = (Crypto.CryptoDigestAlgorithm && Crypto.CryptoDigestAlgorithm.SHA256) || 'SHA-256';
   try {
-    return await Crypto.digestStringAsync(
-      Crypto.CryptoDigestAlgorithm.SHA256,
-      `${salt}:${normalizeAdminKey(plainTextKey)}`
-    );
+    return await Crypto.digestStringAsync(algo, `${salt}:${normalizeAdminKey(plainTextKey)}`);
   } catch (e) {
-    // Fallback if Crypto module option differs on device
-    return await Crypto.digestStringAsync(
-      'SHA-256',
-      `${salt}:${normalizeAdminKey(plainTextKey)}`
-    );
+    return await Crypto.digestStringAsync('SHA-256', `${salt}:${normalizeAdminKey(plainTextKey)}`);
   }
 }
 
@@ -219,7 +212,7 @@ export async function verifyAdminMasterKey(inputKey, db, saveDb) {
   settings.adminKeySalt = salt;
   settings.adminFailedAttempts = attempts;
 
-  if (attempts >= MAX_ADMIN_ATTEMPTS) {
+  if (attempts >= MAX_ADMIN_TRIES) {
     settings.adminLockUntil = now + ADMIN_LOCKOUT_MS;
     settings.adminFailedAttempts = 0;
     if (saveDb) await saveDb(db);
@@ -230,7 +223,7 @@ export async function verifyAdminMasterKey(inputKey, db, saveDb) {
   }
 
   if (saveDb) await saveDb(db);
-  const triesLeft = MAX_ADMIN_ATTEMPTS - attempts;
+  const triesLeft = MAX_ADMIN_TRIES - attempts;
   return {
     ok: false,
     error: `Invalid Admin Key (${triesLeft} ${triesLeft === 1 ? 'try' : 'tries'} left).`,

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   AppState,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -181,8 +182,13 @@ const styles = StyleSheet.create({
     borderColor: C.white,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  logoText: { color: C.white, fontSize: 11, fontWeight: '800' },
+  logoImage: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
   headerCopy: { flex: 1, minWidth: 0 },
   headerTitle: { color: C.white, fontSize: 17, fontWeight: '800' },
   headerSub: { color: '#9fd8cf', fontSize: 11.5, marginTop: 1 },
@@ -2707,7 +2713,10 @@ const hasAdminKey = true;
       <StatusBar barStyle="light-content" />
       <View style={styles.header}>
         <View style={styles.logo}>
-          <Text style={styles.logoText}>CS</Text>
+          <Image
+            source={require('./assets/(CSSO) LOGO.png')}
+            style={styles.logoImage}
+          />
         </View>
         <View style={styles.headerCopy}>
           <Text style={styles.headerTitle}>CSSO Officer</Text>
