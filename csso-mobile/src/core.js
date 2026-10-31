@@ -104,7 +104,7 @@ function memberBlockedReason(member) {
 export async function loadDB() {
   try {
     const raw = await AsyncStorage.getItem(DB_KEY);
-    if (!raw) return INITIAL_STATE;
+    if (!raw) return JSON.parse(JSON.stringify(INITIAL_STATE));
     const parsed = JSON.parse(raw);
     return {
       members: parsed.members || {},
@@ -113,7 +113,7 @@ export async function loadDB() {
     };
   } catch (err) {
     console.error('Failed to load DB', err);
-    return INITIAL_STATE;
+    return JSON.parse(JSON.stringify(INITIAL_STATE));
   }
 }
 
