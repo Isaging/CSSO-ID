@@ -699,8 +699,15 @@ export default function App() {
   };
 
   const updateState = async (nextState) => {
-    setDb(nextState);
-    await saveDB(nextState);
+    try {
+      await saveDB(nextState);
+      setDb(nextState);
+      return true;
+    } catch (e) {
+      console.error('SAVE_FAILED', e);
+      showToast('Could not save on this phone. Storage may be full — free some space and try again.');
+      return false;
+    }
   };
 
   if (!db) {
@@ -894,7 +901,7 @@ const hasAdminKey = true;
       showToast(res.error);
       return;
     }
-    await updateState(res.nextState);
+    if (!(await updateState(res.nextState))) return;
     if (session?.member?.token === editingMember.token) {
       const updated = res.member;
       const stillActive = updated.status === 'active';
@@ -924,7 +931,7 @@ const hasAdminKey = true;
       showToast(res.error);
       return;
     }
-    await updateState(res.nextState);
+    if (!(await updateState(res.nextState))) return;
     setConfirmExpire(false);
     showToast(
       res.count
@@ -944,7 +951,7 @@ const hasAdminKey = true;
       showToast(res.error);
       return;
     }
-    await updateState(res.nextState);
+    if (!(await updateState(res.nextState))) return;
     setConfirmPurgeAll(false);
     setMemberQuery('');
     showToast(
@@ -965,7 +972,7 @@ const hasAdminKey = true;
       showToast(res.error);
       return;
     }
-    await updateState(res.nextState);
+    if (!(await updateState(res.nextState))) return;
     closeMemberEdit();
     showToast('Student data purged. Personal details were removed from this phone.');
   };
@@ -986,7 +993,7 @@ const hasAdminKey = true;
     })
     .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
 
-  const handleOfficePick = (member, manual = true) => {
+  const handleOfficePick = async (member, manual = true) => {
     const res = officeTap(db, {
       token: member.token,
       studentNo: member.student_no,
@@ -1000,13 +1007,13 @@ const hasAdminKey = true;
       showToast(res.error);
       return;
     }
-    updateState(res.nextState);
+    if (!(await updateState(res.nextState))) return;
     setLastOffice({ ok: true, log: res.log, member: res.member });
     setOfficeQuery('');
     showToast(`${res.log.name || 'Member'} timed ${res.log.action === 'office_in' ? 'in' : 'out'}.`);
   };
 
-  const handlePrintPick = (member, manual = true) => {
+  const handlePrintPick = async (member, manual = true) => {
     const now = Date.now();
     if (now - lastTapTimeRef.current < 3000) return;
     lastTapTimeRef.current = now;
@@ -1026,13 +1033,13 @@ const hasAdminKey = true;
       showToast(res.error);
       return;
     }
-    updateState(res.nextState);
+    if (!(await updateState(res.nextState))) return;
     setLastPrint({ ok: true, log: res.log, member: res.member });
     setPrintQuery('');
     showToast(`Deducted ₱${res.log.amount.toFixed(2)} from ${res.log.name}.`);
   };
 
-  const handleGuestPrint = () => {
+  const handleGuestPrint = async () => {
     const res = logGuestPrint(db, {
       amount,
       note: note.trim(),
@@ -1047,7 +1054,7 @@ const hasAdminKey = true;
       showToast(res.error);
       return;
     }
-    updateState(res.nextState);
+    if (!(await updateState(res.nextState))) return;
     setLastPrint({ ok: true, log: res.log });
     setGuestName('');
     setGuestId('');
@@ -1080,13 +1087,13 @@ const hasAdminKey = true;
     setAmount(next.toFixed(2));
   };
 
-  const handleUndo = (logId) => {
+  const handleUndo = async (logId) => {
     const res = undoLastPrint(db, logId, session);
     if (!res.ok) {
       showToast(res.error);
       return;
     }
-    updateState(res.nextState);
+    if (!(await updateState(res.nextState))) return;
     if (lastPrint && lastPrint.log && lastPrint.log.id === logId) {
       const next = res.nextState.logs.find(
         (log) => log.action === 'print' || log.action === 'print_guest'
@@ -1122,7 +1129,7 @@ const hasAdminKey = true;
 
   const preview = getPreview();
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editingLog) return;
     const res = editPrintLog(db, {
       logId: editingLog.id,
@@ -1134,7 +1141,7 @@ const hasAdminKey = true;
       showToast(res.error);
       return;
     }
-    updateState(res.nextState);
+    if (!(await updateState(res.nextState))) return;
     if (lastPrint && lastPrint.log && lastPrint.log.id === editingLog.id) {
       const updated = res.nextState.logs.find((log) => log.id === editingLog.id);
       if (updated) setLastPrint({ ok: true, log: updated });
@@ -1143,14 +1150,14 @@ const hasAdminKey = true;
     showToast('Print log updated.');
   };
 
-  const handleVoidRefund = () => {
+  const handleVoidRefund = async () => {
     if (!editingLog) return;
     const res = voidPrintLog(db, editingLog.id, session);
     if (!res.ok) {
       showToast(res.error);
       return;
     }
-    updateState(res.nextState);
+    if (!(await updateState(res.nextState))) return;
     if (lastPrint && lastPrint.log && lastPrint.log.id === editingLog.id) {
       const next = res.nextState.logs.find(
         (log) => log.action === 'print' || log.action === 'print_guest'
@@ -1171,7 +1178,7 @@ const hasAdminKey = true;
       showToast(res.error);
       return;
     }
-    await updateState(res.nextState);
+    if (!(await updateState(res.nextState))) return;
     showToast(
       res.count > 0
         ? `Synced ${res.count} record${res.count === 1 ? '' : 's'}.`

@@ -124,6 +124,7 @@ export async function saveDB(state) {
     await AsyncStorage.setItem(DB_KEY, JSON.stringify(state));
   } catch (err) {
     console.error('Failed to save DB', err);
+    throw err;
   }
 }
 
