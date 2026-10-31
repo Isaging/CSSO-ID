@@ -2215,13 +2215,15 @@ const hasAdminKey = true;
                   </Text>
                   <View style={styles.row}>
                     <SyncBadge synced={log.synced} />
-                    <TouchableOpacity
-                      style={[styles.btnSm, styles.btnSmAlt]}
-                      onPress={() => openEdit(log)}
-                      accessibilityRole="button"
-                    >
-                      <Text style={styles.btnSmAltText}>Edit</Text>
-                    </TouchableOpacity>
+                    {log.synced ? null : (
+                      <TouchableOpacity
+                        style={[styles.btnSm, styles.btnSmAlt]}
+                        onPress={() => openEdit(log)}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.btnSmAltText}>Edit</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
               </View>

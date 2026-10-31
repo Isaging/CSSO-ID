@@ -655,6 +655,9 @@ export function undoLastPrint(state, logId, session) {
   if (targetLog.action !== 'print' && !isGuest) {
     return { ok: false, error: 'Only print transactions can be undone here' };
   }
+  if (targetLog.synced) {
+    return { ok: false, error: 'Synced logs are locked.' };
+  }
 
   const member = Object.values(state.members).find(
     (m) => m.student_no === targetLog.student_no || m.token === targetLog.token
@@ -693,6 +696,9 @@ export function editPrintLog(state, { logId, newAmount, newNote, session }) {
   const isGuest = oldLog.action === 'print_guest';
   if (oldLog.action !== 'print' && !isGuest) {
     return { ok: false, error: 'Only print transactions can be edited here' };
+  }
+  if (oldLog.synced) {
+    return { ok: false, error: 'Synced logs are locked.' };
   }
 
   const parsedNewAmt = Math.round(parseFloat(newAmount) * 100) / 100;
