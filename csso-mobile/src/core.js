@@ -130,7 +130,7 @@ export async function saveDB(state) {
 // the plaintext password never enters the repo or the phone's settings.
 const ADMIN_KEY_SALT = 'csso_admin_salt_2026_v1';
 const DEFAULT_ADMIN_KEY_HASH =
-  '85369030cb9ebaed4952e007a9d6b29eeb61faaed8cc513e423c20fc527f8038';
+  '1a87297c1af3f917de54c673fdfd640e14787576e935e22df19868084753c59e';
 const ADMIN_LOCKOUT_MS = 60 * 1000; // 1 minute
 
 function normalizeAdminKey(key) {
