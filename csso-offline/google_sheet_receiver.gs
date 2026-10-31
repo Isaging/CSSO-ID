@@ -18,14 +18,14 @@ function doPost(e) {
 
     const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
     const rows = data.logs; // Array of objects matching contract
-    const existingIds = sheet.getDataRange().getValues().map(r => r[0]); // id is column 0
+    const existingIds = new Set(sheet.getDataRange().getValues().map(r => r[0])); // id is column 0
     
     const newIds = [];
     const rowsToAppend = [];
 
     rows.forEach(row => {
-      // Idempotency check: Skip if ID already exists
-      if (!existingIds.includes(row.id)) {
+      // Idempotency check: Skip if ID already exists (including earlier in this batch)
+      if (!existingIds.has(row.id)) {
         rowsToAppend.push([
           row.id,
           row.time,
@@ -39,6 +39,7 @@ function doPost(e) {
           row.operator_role
         ]);
         newIds.push(row.id);
+        existingIds.add(row.id);
       }
     });
 
