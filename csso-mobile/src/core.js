@@ -1030,10 +1030,14 @@ export function exportMembersCSV(state, session) {
 }
 
 // Prefix must be https and end with ?t= or /t/. Returns '' when unusable.
+export function isValidLinkPrefix(prefix) {
+  const clean = String(prefix || '').trim();
+  return /^https:\/\/.+/.test(clean) && (clean.endsWith('?t=') || clean.endsWith('/t/'));
+}
+
 export function linkForToken(prefix, token) {
   const clean = String(prefix || '').trim();
-  if (!/^https:\/\/.+/.test(clean) || !(clean.endsWith('?t=') || clean.endsWith('/t/'))) return '';
-  return `${clean}${token}`;
+  return isValidLinkPrefix(clean) ? `${clean}${token}` : '';
 }
 
 // Saves the member before the sticker is written; the caller keeps the prior

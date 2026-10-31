@@ -29,6 +29,7 @@ import {
   formatTime,
   importMembersCSV,
   isRetentionPast,
+  isValidLinkPrefix,
   issueMember,
   linkForToken,
   loadDB,
@@ -779,6 +780,14 @@ const hasAdminKey = true;
       ...latest,
       settings: { ...latest.settings, [key]: value },
     }));
+  };
+
+  // Checked on blur, not per keystroke: a half-typed URL is always invalid.
+  const checkLinkPrefix = () => {
+    const prefix = (dbRef.current.settings.link_prefix || '').trim();
+    if (prefix && !isValidLinkPrefix(prefix)) {
+      showToast('Link prefix must start with https:// and end with ?t= or /t/.');
+    }
   };
 
   const lockApp = () => {
@@ -2666,6 +2675,7 @@ const hasAdminKey = true;
           style={styles.input}
           value={db.settings.link_prefix || ''}
           onChangeText={(value) => updateSetting('link_prefix', value)}
+          onBlur={checkLinkPrefix}
           placeholder="https://your-domain/t/"
           placeholderTextColor={C.teal}
           autoCapitalize="none"
