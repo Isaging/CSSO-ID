@@ -33,7 +33,7 @@ Data moves as **CSV** so it opens directly in Excel and Google Sheets, and syncs
 5. **Idempotent Sync.** Every log row has a unique UUID. The Apps Script receiver skips duplicate IDs automatically.
 6. **Authentication & Roles:**
    - **`officer` / `encrypts` / `admin`**: Sign in by tapping their own NFC ID card at the lock screen.
-   - **`admin`**: Unlocked by entering the single **Admin Master Key** (`CSSO.2026.Pres.Alexie#Admin!`), which is stored securely as a salted SHA-256 hash in local settings with a 1-minute lockout after 5 incorrect attempts.
+   - **`admin`**: Unlocked by entering the single **Admin Master Key** for this deployment, which is stored securely as a salted SHA-256 hash in local settings with a 1-minute lockout after 5 incorrect attempts.
    - **`member`**: Refused at the lock screen (cannot operate the app; receives printing only).
 
 ---
@@ -90,7 +90,7 @@ npx expo run:android
 
 ## Initial Setup & Usage
 
-1. **First Launch**: On first launch, if no member list is loaded, enter the **Admin Master Key** (`CSSO.2026.Pres.Alexie#Admin!`) at the lock screen to unlock Admin access.
+1. **First Launch**: On first launch, if no member list is loaded, enter the **Admin Master Key** at the lock screen to unlock Admin access.
 2. **Import Members**: Use the **Data** tab (Admin unlocked) to import your initial member CSV (matching columns: `token`, `student_no`, `full_name`, `role`, `status`, `print_balance`, `valid_until`).
 3. **Officer Sign-In**: Working officers or encrypts staff tap their own NFC ID card at the lock screen to begin their shift.
 4. **Admin Actions**: Enter the Admin Master Key to manage member statuses, semester rollovers, data retention purges (`valid_until`), and issue new NFC IDs.

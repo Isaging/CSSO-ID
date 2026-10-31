@@ -3,7 +3,8 @@
  * Data Contract: id, time, operator, student_no, name, action, amount, balance_after, note, operator_role
  */
 
-const SECRET = 'CSSO_NFC_Secret_2026_#!99'; // Palitan ito ng iyong shared secret
+// Set CSSO_SECRET in Project Settings > Script Properties. Never hardcode it here.
+const SECRET = PropertiesService.getScriptProperties().getProperty('CSSO_SECRET');
 
 function doPost(e) {
   try {
