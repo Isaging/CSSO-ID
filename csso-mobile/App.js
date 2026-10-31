@@ -622,6 +622,7 @@ export default function App() {
   const [adminPrompt, setAdminPrompt] = useState(false);
   const [adminKey, setAdminKey] = useState('');
   const [adminError, setAdminError] = useState('');
+  const [adminKeyConfirm, setAdminKeyConfirm] = useState('');
   const [adminBusy, setAdminBusy] = useState(false);
 
   const [memberQuery, setMemberQuery] = useState('');
