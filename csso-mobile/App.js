@@ -622,6 +622,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('office');
   const [isOnline, setIsOnline] = useState(false);
   const [db, setDb] = useState(null);
+  const dbRef = useRef(null); // latest state, readable before React re-renders
+  const saveQueue = useRef(Promise.resolve()); // keeps disk writes in order
   const [toast, setToast] = useState('');
   const [session, setSession] = useState(null);
   const [loginBusy, setLoginBusy] = useState(false);
@@ -674,7 +676,10 @@ export default function App() {
     const unsubscribe = NetInfo.addEventListener((state) => {
       setIsOnline(Boolean(state.isConnected && state.isInternetReachable));
     });
-    loadDB().then(setDb);
+    loadDB().then((loaded) => {
+      dbRef.current = loaded;
+      setDb(loaded);
+    });
     return unsubscribe;
   }, []);
 
@@ -705,16 +710,22 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToast(''), 2400);
   };
 
-  const updateState = async (nextState) => {
-    try {
-      await saveDB(nextState);
-      setDb(nextState);
-      return true;
-    } catch (e) {
-      console.error('SAVE_FAILED', e);
-      showToast('Could not save on this phone. Storage may be full — free some space and try again.');
-      return false;
-    }
+  // Claims the next state immediately so a fast second tap builds on it,
+  // then saves in order. Accepts a function for state-dependent writes.
+  const updateState = (nextState) => {
+    const next = typeof nextState === 'function' ? nextState(dbRef.current) : nextState;
+    dbRef.current = next;
+    setDb(next);
+    const save = saveQueue.current.then(() => saveDB(next));
+    saveQueue.current = save.catch(() => {});
+    return save.then(
+      () => true,
+      (e) => {
+        console.error('SAVE_FAILED', e);
+        showToast('Could not save on this phone. Storage may be full — free some space and try again.');
+        return false;
+      }
+    );
   };
 
   if (!db) {
@@ -764,7 +775,10 @@ const hasAdminKey = true;
       showToast('Admin Master Key required to change settings.');
       return;
     }
-    updateState({ ...db, settings: { ...db.settings, [key]: value } });
+    updateState((latest) => ({
+      ...latest,
+      settings: { ...latest.settings, [key]: value },
+    }));
   };
 
   const lockApp = () => {
@@ -805,7 +819,7 @@ const hasAdminKey = true;
   };
 
   const handleLoginToken = (rawToken) => {
-    const res = signInWithToken(db, rawToken);
+    const res = signInWithToken(dbRef.current, rawToken);
     if (!res.ok) {
       showToast(res.error);
       return;
@@ -849,7 +863,7 @@ const hasAdminKey = true;
 
     setAdminBusy(true);
     try {
-      const res = await verifyAdminMasterKey(adminKey, db, saveDB);
+      const res = await verifyAdminMasterKey(adminKey, dbRef.current, updateState);
       if (!res.ok) {
         setAdminError(res.error);
         return;
@@ -894,7 +908,7 @@ const hasAdminKey = true;
       return;
     }
 
-    const res = updateMember(db, {
+    const res = updateMember(dbRef.current, {
       token: editingMember.token,
       role: editRole,
       status: editStatus,
@@ -928,7 +942,7 @@ const hasAdminKey = true;
   };
 
   const handleExpireSemester = async () => {
-    const res = expireSemester(db, {
+    const res = expireSemester(dbRef.current, {
       keepToken: session?.member?.token,
       operator: operatorName,
       operatorRole,
@@ -948,7 +962,7 @@ const hasAdminKey = true;
   };
 
   const handlePurgeAll = async () => {
-    const res = purgeExpiredData(db, {
+    const res = purgeExpiredData(dbRef.current, {
       keepToken: session?.member?.token,
       operator: operatorName,
       operatorRole,
@@ -970,7 +984,7 @@ const hasAdminKey = true;
 
   const handlePurgeMember = async () => {
     if (!editingMember) return;
-    const res = purgeMember(db, editingMember.token, {
+    const res = purgeMember(dbRef.current, editingMember.token, {
       operator: operatorName,
       operatorRole,
       session,
@@ -1001,7 +1015,7 @@ const hasAdminKey = true;
     .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
 
   const handleOfficePick = async (member, manual = true) => {
-    const res = officeTap(db, {
+    const res = officeTap(dbRef.current, {
       token: member.token,
       studentNo: member.student_no,
       note: manual ? '[manual]' : '',
@@ -1026,7 +1040,7 @@ const hasAdminKey = true;
     lastTapTimeRef.current = now;
 
     const cleanNote = [note.trim(), manual ? '[manual]' : ''].filter(Boolean).join(' ');
-    const res = deductPrint(db, {
+    const res = deductPrint(dbRef.current, {
       token: member.token,
       studentNo: member.student_no,
       amount,
@@ -1047,7 +1061,7 @@ const hasAdminKey = true;
   };
 
   const handleGuestPrint = async () => {
-    const res = logGuestPrint(db, {
+    const res = logGuestPrint(dbRef.current, {
       amount,
       note: note.trim(),
       name: guestName,
@@ -1095,7 +1109,7 @@ const hasAdminKey = true;
   };
 
   const handleUndo = async (logId) => {
-    const res = undoLastPrint(db, logId, session);
+    const res = undoLastPrint(dbRef.current, logId, session);
     if (!res.ok) {
       showToast(res.error);
       return;
@@ -1138,7 +1152,7 @@ const hasAdminKey = true;
 
   const handleSaveEdit = async () => {
     if (!editingLog) return;
-    const res = editPrintLog(db, {
+    const res = editPrintLog(dbRef.current, {
       logId: editingLog.id,
       newAmount: editAmount,
       newNote: editNote,
@@ -1159,7 +1173,7 @@ const hasAdminKey = true;
 
   const handleVoidRefund = async () => {
     if (!editingLog) return;
-    const res = voidPrintLog(db, editingLog.id, session);
+    const res = voidPrintLog(dbRef.current, editingLog.id, session);
     if (!res.ok) {
       showToast(res.error);
       return;
@@ -1180,12 +1194,28 @@ const hasAdminKey = true;
       showToast('You do not have permission to sync.');
       return;
     }
-    const res = await syncLogs(db, session);
+    const start = dbRef.current;
+    const startIds = new Set(start.logs.map((log) => log.id));
+    const res = await syncLogs(start, session);
     if (!res.ok) {
       showToast(res.error);
       return;
     }
-    if (!(await updateState(res.nextState))) return;
+    if (
+      !(await updateState((latest) => {
+        const latestIds = new Set(latest.logs.map((log) => log.id));
+        return {
+          ...latest,
+          // Keep taps logged while the sync was in flight, and apply the
+          // synced flags and office-log pruning from the response.
+          logs: [
+            ...latest.logs.filter((log) => !startIds.has(log.id)),
+            ...res.nextState.logs.filter((log) => latestIds.has(log.id)),
+          ],
+        };
+      }))
+    )
+      return;
     showToast(
       res.count > 0
         ? `Synced ${res.count} record${res.count === 1 ? '' : 's'}.`
@@ -1235,7 +1265,7 @@ const hasAdminKey = true;
       const asset = picked.assets && picked.assets[0];
       if (!asset) return;
       const text = await new File(asset.uri).text();
-      const result = importMembersCSV(db, text, { session });
+      const result = importMembersCSV(dbRef.current, text, { session });
       if (!result.ok) {
         showToast(result.error);
         return;
@@ -2321,7 +2351,7 @@ const hasAdminKey = true;
       showToast('Select a member first.');
       return;
     }
-    const res = issueMember(db, {
+    const res = issueMember(dbRef.current, {
       mode: issueMode,
       memberToken: issueMember && issueMember.token,
       name: issueName,
@@ -2334,20 +2364,20 @@ const hasAdminKey = true;
       showToast(res.error);
       return;
     }
-    const url = linkForToken(db.settings.link_prefix, res.token);
+    const url = linkForToken(dbRef.current.settings.link_prefix, res.token);
     if (!url) {
       showToast('Set a valid Link prefix in Data settings first.');
       return;
     }
 
-    const before = db;
+    const before = dbRef.current;
     if (!(await updateState(res.nextState))) return;
     let write;
     try {
       const nfc = require('./src/nfc');
       if (!(await nfc.initNfc())) throw new Error('This device does not support NFC.');
       write = await nfc.writeSticker(url, res.token, issueLock, (token) => {
-        const other = db.members[token];
+        const other = dbRef.current.members[token];
         return other ? other.full_name || other.student_no || token : null;
       });
     } catch (e) {
@@ -2361,7 +2391,7 @@ const hasAdminKey = true;
       return;
     }
 
-    const final = markTagIssued(res.nextState, {
+    const final = markTagIssued(dbRef.current, {
       token: res.token,
       locked: write.locked,
       operator: operatorName,
@@ -2684,7 +2714,10 @@ const hasAdminKey = true;
             <TouchableOpacity
               style={[styles.btn, styles.btnAlt, styles.csvBtn]}
               onPress={() =>
-                exportCSV(`csso-new-${todayManila()}.csv`, exportNewLogsCSV(db, session))
+                exportCSV(
+                  `csso-new-${todayManila()}.csv`,
+                  exportNewLogsCSV(dbRef.current, session)
+                )
               }
               accessibilityRole="button"
             >
@@ -2695,7 +2728,10 @@ const hasAdminKey = true;
             <TouchableOpacity
               style={[styles.btn, styles.btnAlt, styles.csvBtn]}
               onPress={() =>
-                exportCSV(`csso-recent-${todayManila()}.csv`, exportRecentLogsCSV(db, session))
+                exportCSV(
+                  `csso-recent-${todayManila()}.csv`,
+                  exportRecentLogsCSV(dbRef.current, session)
+                )
               }
               accessibilityRole="button"
             >
@@ -2706,7 +2742,10 @@ const hasAdminKey = true;
             <TouchableOpacity
               style={[styles.btn, styles.btnAlt, styles.csvBtn]}
               onPress={() =>
-                exportCSV(`csso-members-${todayManila()}.csv`, exportMembersCSV(db, session))
+                exportCSV(
+                  `csso-members-${todayManila()}.csv`,
+                  exportMembersCSV(dbRef.current, session)
+                )
               }
               accessibilityRole="button"
             >
