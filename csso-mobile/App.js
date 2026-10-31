@@ -23,10 +23,17 @@ import {
   deductPrint,
   editPrintLog,
   expireSemester,
+  exportMembersCSV,
+  exportNewLogsCSV,
+  exportRecentLogsCSV,
   formatTime,
+  importMembersCSV,
   isRetentionPast,
+  issueMember,
+  linkForToken,
   loadDB,
   logGuestPrint,
+  markTagIssued,
   officeTap,
   purgeExpiredData,
   purgeMember,
@@ -747,7 +754,7 @@ const hasAdminKey = true;
   const issueResults = searchMembers(members, issueQuery);
   const amountNumber = Math.max(0, Math.min(1000, parseFloat(amount) || 0));
   const amountLabel = amountNumber.toFixed(2);
-  const linkPrefix = db.settings.link_prefix || 'https://github.com/Isaging/CSSO-ID/t/';
+  const linkPrefix = db.settings.link_prefix || 'https://your-domain/t/';
   const purgeCount = Object.values(members).filter(
     (member) => isRetentionPast(member) && member.token !== session?.member?.token
   ).length;
@@ -1186,8 +1193,63 @@ const hasAdminKey = true;
     );
   };
 
-  const notReady = (label) => {
-    showToast(`${label} is not connected in this build.`);
+  const exportCSV = async (filename, result) => {
+    if (!result.ok) {
+      showToast(result.error);
+      return;
+    }
+    if (!result.count) {
+      showToast('Nothing to export yet.');
+      return;
+    }
+    try {
+      const { File, Paths } = require('expo-file-system');
+      const Sharing = require('expo-sharing');
+      if (!(await Sharing.isAvailableAsync())) {
+        showToast('Sharing is not available on this device.');
+        return;
+      }
+      const file = new File(Paths.cache, filename);
+      file.create({ overwrite: true });
+      file.write(result.csv);
+      await Sharing.shareAsync(file.uri, {
+        mimeType: 'text/csv',
+        dialogTitle: 'Export CSSO records',
+        UTI: 'public.comma-separated-values-text',
+      });
+    } catch (e) {
+      showToast((e && e.message) || 'Could not create the CSV file.');
+    }
+  };
+
+  const handleImportCSV = async () => {
+    try {
+      const DocumentPicker = require('expo-document-picker');
+      const { File } = require('expo-file-system');
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: ['text/csv', 'text/plain', 'text/comma-separated-values', 'application/vnd.ms-excel'],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (picked.canceled) return;
+      const asset = picked.assets && picked.assets[0];
+      if (!asset) return;
+      const text = await new File(asset.uri).text();
+      const result = importMembersCSV(db, text, { session });
+      if (!result.ok) {
+        showToast(result.error);
+        return;
+      }
+      if (!(await updateState(result.nextState))) return;
+      showToast(
+        `Imported ${result.imported} member${result.imported === 1 ? '' : 's'}` +
+          (result.skipped
+            ? `, skipped ${result.skipped} bad row${result.skipped === 1 ? '' : 's'}.`
+            : '.')
+      );
+    } catch (e) {
+      showToast((e && e.message) || 'Could not read that CSV file.');
+    }
   };
 
   const renderUnlockCard = (title, text) => (
@@ -2242,9 +2304,13 @@ const hasAdminKey = true;
     </>
   );
 
-  const handleIssue = () => {
+  const handleIssue = async () => {
     if (!can(session, 'issue')) {
       showToast('Admin Master Key required to issue stickers.');
+      return;
+    }
+    if (Platform.OS === 'web') {
+      showToast('Sticker writing needs the phone app, not the browser preview.');
       return;
     }
     if (issueMode === 'new' && !issueName.trim()) {
@@ -2255,7 +2321,71 @@ const hasAdminKey = true;
       showToast('Select a member first.');
       return;
     }
-    showToast('Sticker writing is not connected in this build yet.');
+    const res = issueMember(db, {
+      mode: issueMode,
+      memberToken: issueMember && issueMember.token,
+      name: issueName,
+      studentNo: issueStudentNo,
+      role: issueRole,
+      validUntil: issueValidUntil,
+      session,
+    });
+    if (!res.ok) {
+      showToast(res.error);
+      return;
+    }
+    const url = linkForToken(db.settings.link_prefix, res.token);
+    if (!url) {
+      showToast('Set a valid Link prefix in Data settings first.');
+      return;
+    }
+
+    const before = db;
+    if (!(await updateState(res.nextState))) return;
+    let write;
+    try {
+      const nfc = require('./src/nfc');
+      if (!(await nfc.initNfc())) throw new Error('This device does not support NFC.');
+      write = await nfc.writeSticker(url, res.token, issueLock, (token) => {
+        const other = db.members[token];
+        return other ? other.full_name || other.student_no || token : null;
+      });
+    } catch (e) {
+      await updateState(before);
+      const message = String((e && e.message) || '');
+      showToast(
+        message.startsWith('OWNED:')
+          ? `That sticker already belongs to ${message.slice(6)}.`
+          : message || 'The sticker could not be written.'
+      );
+      return;
+    }
+
+    const final = markTagIssued(res.nextState, {
+      token: res.token,
+      locked: write.locked,
+      operator: operatorName,
+      operatorRole,
+      session,
+    });
+    if (!final.ok) {
+      showToast(final.error);
+      return;
+    }
+    if (!(await updateState(final.nextState))) return;
+    showToast(
+      write.lockFailed
+        ? 'Sticker written, but locking failed. It can still be rewritten.'
+        : write.locked
+          ? 'Sticker written, verified, and locked.'
+          : 'Sticker written and verified. Not locked.'
+    );
+    setIssueName('');
+    setIssueStudentNo('');
+    setIssueRole('member');
+    setIssueValidUntil('');
+    setIssueMember(null);
+    setIssueQuery('');
   };
 
   const issueToken =
@@ -2452,7 +2582,8 @@ const hasAdminKey = true;
         </TouchableOpacity>
         <View style={styles.note}>
           <Text style={styles.noteText}>
-            Sticker writing, verify, and lock are not connected in this UI build yet.
+            The link is written, read back to verify, then locked. If anything fails, the member
+            record is restored.
           </Text>
         </View>
       </Card>
@@ -2542,7 +2673,7 @@ const hasAdminKey = true;
         {can(session, 'import') ? (
           <TouchableOpacity
             style={[styles.btn, styles.btnBlock]}
-            onPress={() => notReady('Member CSV import')}
+            onPress={handleImportCSV}
             accessibilityRole="button"
           >
             <Text style={styles.btnText}>Import members CSV</Text>
@@ -2552,7 +2683,9 @@ const hasAdminKey = true;
           {can(session, 'export_new') ? (
             <TouchableOpacity
               style={[styles.btn, styles.btnAlt, styles.csvBtn]}
-              onPress={() => notReady('Export new records')}
+              onPress={() =>
+                exportCSV(`csso-new-${todayManila()}.csv`, exportNewLogsCSV(db, session))
+              }
               accessibilityRole="button"
             >
               <Text style={styles.btnAltText}>Export new records</Text>
@@ -2561,7 +2694,9 @@ const hasAdminKey = true;
           {can(session, 'export_recent') ? (
             <TouchableOpacity
               style={[styles.btn, styles.btnAlt, styles.csvBtn]}
-              onPress={() => notReady('Export recent logs')}
+              onPress={() =>
+                exportCSV(`csso-recent-${todayManila()}.csv`, exportRecentLogsCSV(db, session))
+              }
               accessibilityRole="button"
             >
               <Text style={styles.btnAltText}>Export recent logs</Text>
@@ -2570,7 +2705,9 @@ const hasAdminKey = true;
           {can(session, 'export_members') ? (
             <TouchableOpacity
               style={[styles.btn, styles.btnAlt, styles.csvBtn]}
-              onPress={() => notReady('Export members CSV')}
+              onPress={() =>
+                exportCSV(`csso-members-${todayManila()}.csv`, exportMembersCSV(db, session))
+              }
               accessibilityRole="button"
             >
               <Text style={styles.btnAltText}>Export members CSV</Text>

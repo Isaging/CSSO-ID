@@ -819,3 +819,276 @@ export async function syncLogs(state, session) {
     return { ok: false, error: err.message || 'Sync failed. Check your connection.' };
   }
 }
+
+// --- CSV import/export and sticker issuing ---
+
+const TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+const TOKEN_RE = /^[A-Za-z0-9_-]{8,64}$/;
+
+// 16 chars, rejection sampling so every character is equally likely.
+function makeToken(taken) {
+  const limit = 256 - (256 % TOKEN_ALPHABET.length);
+  let token = '';
+  while (token.length < 16) {
+    for (const byte of Crypto.getRandomBytes(32)) {
+      if (byte >= limit) continue;
+      token += TOKEN_ALPHABET[byte % TOKEN_ALPHABET.length];
+      if (token.length === 16) break;
+    }
+  }
+  return taken.includes(token) ? makeToken(taken) : token;
+}
+
+// Handles quoted fields, commas, CRLF, and a UTF-8 BOM.
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let quoted = false;
+  const source = String(text || '').replace(/^\uFEFF/, '');
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (quoted) {
+      if (ch === '"' && source[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (ch === '"') {
+        quoted = false;
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      quoted = true;
+    } else if (ch === ',') {
+      row.push(field);
+      field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && source[i + 1] === '\n') i++;
+      row.push(field);
+      if (row.some((value) => value !== '')) rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += ch;
+    }
+  }
+  row.push(field);
+  if (row.some((value) => value !== '')) rows.push(row);
+  return rows;
+}
+
+function csvCell(value) {
+  let text = value === undefined || value === null ? '' : String(value);
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
+  if (/[",\r\n]/.test(text)) text = `"${text.replace(/"/g, '""')}"`;
+  return text;
+}
+
+function csvRows(header, rows) {
+  return [header.join(','), ...rows.map((row) => header.map((key) => csvCell(row[key])).join(','))].join(
+    '\r\n'
+  );
+}
+
+// Safe import: existing phones keep their balances, and a re-issued student's
+// balance follows the new token while the old token is dropped.
+export function importMembersCSV(state, text, { session }) {
+  if (!can(session, 'import')) {
+    return { ok: false, error: 'Admin Master Key required to import members.' };
+  }
+  const rows = parseCSV(text);
+  if (!rows.length) return { ok: false, error: 'That CSV file is empty.' };
+  const header = rows[0].map((name) => String(name).trim().toLowerCase());
+  const column = (name) => header.indexOf(name);
+  if (column('token') === -1) {
+    return { ok: false, error: 'That CSV needs a token column.' };
+  }
+
+  const members = { ...state.members };
+  let imported = 0;
+  let skipped = 0;
+  for (const row of rows.slice(1)) {
+    const get = (name) => {
+      const index = column(name);
+      return index === -1 ? '' : String(row[index] === undefined ? '' : row[index]).trim();
+    };
+    const token = get('token');
+    if (!TOKEN_RE.test(token)) {
+      skipped++;
+      continue;
+    }
+    const studentNo = get('student_no');
+    const existing =
+      members[token] ||
+      (studentNo
+        ? Object.values(members).find((m) => m.student_no && m.student_no === studentNo)
+        : null);
+    const role = ROLES.includes(get('role').toLowerCase()) ? get('role').toLowerCase() : null;
+    const status = STATUSES.includes(get('status').toLowerCase())
+      ? get('status').toLowerCase()
+      : null;
+    const validUntil = get('valid_until');
+    const rowBalance = parseFloat(get('print_balance'));
+    const balance = existing
+      ? money(existing.print_balance)
+      : isNaN(rowBalance)
+        ? 40
+        : Math.min(1000, Math.max(0, money(rowBalance)));
+    if (existing && existing.token !== token) delete members[existing.token];
+    members[token] = {
+      token,
+      student_no: studentNo || (existing && existing.student_no) || '',
+      full_name: get('full_name') || (existing && existing.full_name) || '',
+      role: role || (existing ? roleOf(existing) : 'member'),
+      status: status || (existing ? existing.status || 'active' : 'active'),
+      print_balance: balance,
+      valid_until: !validUntil
+        ? (existing && existing.valid_until) || ''
+        : isValidDate(validUntil)
+          ? validUntil
+          : (existing && existing.valid_until) || '',
+      tag_locked:
+        get('tag_locked').toLowerCase() === 'yes'
+          ? 'yes'
+          : (existing && existing.tag_locked) || '',
+    };
+    imported++;
+  }
+  if (!imported) return { ok: false, error: 'No valid member rows found in that CSV.' };
+  return { ok: true, imported, skipped, nextState: { ...state, members } };
+}
+
+export function exportNewLogsCSV(state, session) {
+  if (!can(session, 'export_new')) {
+    return { ok: false, error: 'You do not have permission to export new records.' };
+  }
+  const rows = state.logs.filter((log) => !log.synced);
+  return {
+    ok: true,
+    count: rows.length,
+    csv: csvRows(
+      ['id', 'time', 'operator', 'student_no', 'name', 'action', 'amount', 'balance_after', 'note', 'operator_role'],
+      rows
+    ),
+  };
+}
+
+// "Recent" is the latest 100 rows, newest first, for hand reconciliation.
+export function exportRecentLogsCSV(state, session) {
+  if (!can(session, 'export_recent')) {
+    return { ok: false, error: 'You do not have permission to export recent logs.' };
+  }
+  const rows = [...state.logs]
+    .sort((a, b) => String(b.time).localeCompare(String(a.time)))
+    .slice(0, 100);
+  return {
+    ok: true,
+    count: rows.length,
+    csv: csvRows(
+      ['id', 'time', 'operator', 'student_no', 'name', 'action', 'amount', 'balance_after', 'note', 'operator_role'],
+      rows
+    ),
+  };
+}
+
+export function exportMembersCSV(state, session) {
+  if (!can(session, 'export_members')) {
+    return { ok: false, error: 'You do not have permission to export members.' };
+  }
+  const rows = Object.values(state.members).sort((a, b) =>
+    String(a.full_name || '').localeCompare(String(b.full_name || ''))
+  );
+  return {
+    ok: true,
+    count: rows.length,
+    csv: csvRows(
+      ['token', 'student_no', 'full_name', 'role', 'status', 'print_balance', 'valid_until', 'tag_locked'],
+      rows
+    ),
+  };
+}
+
+// Prefix must be https and end with ?t= or /t/. Returns '' when unusable.
+export function linkForToken(prefix, token) {
+  const clean = String(prefix || '').trim();
+  if (!/^https:\/\/.+/.test(clean) || !(clean.endsWith('?t=') || clean.endsWith('/t/'))) return '';
+  return `${clean}${token}`;
+}
+
+// Saves the member before the sticker is written; the caller keeps the prior
+// state and restores it if the write or verify fails.
+export function issueMember(
+  state,
+  { mode, memberToken, name, studentNo, role, validUntil, session }
+) {
+  if (!can(session, 'issue')) {
+    return { ok: false, error: 'Admin Master Key required to issue stickers.' };
+  }
+  const members = { ...state.members };
+  if (mode === 'new') {
+    const cleanName = String(name || '').trim();
+    if (!cleanName) return { ok: false, error: 'Enter the member name first.' };
+    const cleanValid = String(validUntil || '').trim();
+    if (!isValidDate(cleanValid)) {
+      return { ok: false, error: 'Use YYYY-MM-DD for the retention date.' };
+    }
+    const token = makeToken(Object.keys(members));
+    members[token] = {
+      token,
+      student_no: String(studentNo || '').trim(),
+      full_name: cleanName,
+      role: ROLES.includes(role) ? role : 'member',
+      status: 'active',
+      print_balance: 40,
+      valid_until: cleanValid,
+      tag_locked: '',
+    };
+    return { ok: true, token, nextState: { ...state, members } };
+  }
+
+  const member = state.members[memberToken];
+  if (!member) return { ok: false, error: 'Select a member first.' };
+  if (mode === 'existing') {
+    return { ok: true, token: member.token, nextState: state };
+  }
+  if (mode === 'replace') {
+    const token = makeToken(Object.keys(members));
+    delete members[member.token];
+    members[token] = { ...member, token, tag_locked: '' };
+    return { ok: true, token, nextState: { ...state, members } };
+  }
+  return { ok: false, error: 'Unknown issue mode.' };
+}
+
+export function markTagIssued(state, { token, locked, operator, operatorRole, session }) {
+  if (!can(session, 'issue')) {
+    return { ok: false, error: 'Admin Master Key required to issue stickers.' };
+  }
+  const member = state.members[token];
+  if (!member) return { ok: false, error: 'Member not found in database.' };
+  const op = operatorInfo(state, operator, operatorRole);
+  const log = {
+    id: generateUUID(),
+    time: new Date().toISOString(),
+    ...op,
+    student_no: member.student_no || '',
+    name: member.full_name || '',
+    action: 'tag_issue',
+    amount: 0,
+    balance_after: money(member.print_balance),
+    note: locked ? 'locked' : 'not locked',
+    synced: false,
+    token,
+  };
+  return {
+    ok: true,
+    nextState: {
+      ...state,
+      members: {
+        ...state.members,
+        [token]: { ...member, tag_locked: locked ? 'yes' : '' },
+      },
+      logs: [log, ...state.logs],
+    },
+  };
+}
