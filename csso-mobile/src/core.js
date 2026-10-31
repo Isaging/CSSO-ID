@@ -7,9 +7,7 @@ export const ROLES = ['admin', 'officer', 'encrypts', 'member'];
 export const STATUSES = ['active', 'expired', 'inactive'];
 const WORKING_ROLES = ['admin', 'officer', 'encrypts'];
 const ADMIN_ACTIONS = ['members', 'issue', 'settings', 'import'];
-const ADMIN_KEY_MIN = 8;
 const MAX_ADMIN_TRIES = 5;
-const ADMIN_LOCK_MS = 60 * 1000;
 
 export const INITIAL_STATE = {
   members: {}, // token -> { token, student_no, full_name, role, status, print_balance, valid_until, tag_locked }

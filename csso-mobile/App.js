@@ -632,7 +632,6 @@ export default function App() {
   const [adminPrompt, setAdminPrompt] = useState(false);
   const [adminKey, setAdminKey] = useState('');
   const [adminError, setAdminError] = useState('');
-  const [adminKeyConfirm, setAdminKeyConfirm] = useState('');
   const [adminBusy, setAdminBusy] = useState(false);
 
   const [memberQuery, setMemberQuery] = useState('');
@@ -743,8 +742,7 @@ export default function App() {
   const unsyncedCount = logs.filter((log) => !log.synced).length;
   const memberCount = Object.keys(members).length;
   // The Admin Master Key is a fixed, pre-computed salted SHA-256 digest (see core.js).
-// Only the hash is known; the plaintext password is never stored on the phone.
-const hasAdminKey = true;
+  // Only the hash is known; the plaintext password is never stored on the phone.
   const operatorName = session?.member
     ? session.member.full_name || session.member.student_no || 'Officer'
     : session?.name || 'Admin';
@@ -795,7 +793,7 @@ const hasAdminKey = true;
     setActiveTab('office');
     setAdminPrompt(false);
     setAdminKey('');
-    setAdminKeyConfirm('');
+
     setAdminError('');
     setEditingMember(null);
     setEditingLog(null);
@@ -808,7 +806,7 @@ const hasAdminKey = true;
     setSession(nextSession);
     setAdminPrompt(false);
     setAdminKey('');
-    setAdminKeyConfirm('');
+
     setAdminError('');
     const firstTab =
       nextSession.role === 'encrypts'
@@ -863,7 +861,7 @@ const hasAdminKey = true;
   const openAdminPrompt = () => {
     setAdminPrompt(true);
     setAdminKey('');
-    setAdminKeyConfirm('');
+
     setAdminError('');
   };
 
