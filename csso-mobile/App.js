@@ -670,7 +670,7 @@ export default function App() {
   const [issueLock, setIssueLock] = useState(true);
 
   const toastTimer = useRef(null);
-  const lastTapTimeRef = useRef(0);
+  const lastTapRef = useRef({ token: '', time: 0 });
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
@@ -1036,8 +1036,10 @@ const hasAdminKey = true;
 
   const handlePrintPick = async (member, manual = true) => {
     const now = Date.now();
-    if (now - lastTapTimeRef.current < 3000) return;
-    lastTapTimeRef.current = now;
+    if (lastTapRef.current.token === member.token && now - lastTapRef.current.time < 3000) {
+      return;
+    }
+    lastTapRef.current = { token: member.token, time: now };
 
     const cleanNote = [note.trim(), manual ? '[manual]' : ''].filter(Boolean).join(' ');
     const res = deductPrint(dbRef.current, {
