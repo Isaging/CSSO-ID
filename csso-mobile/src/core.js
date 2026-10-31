@@ -643,6 +643,23 @@ export function logGuestPrint(
   };
 }
 
+// A changed or removed print shifts every newer print balance for that member.
+// Synced rows are immutable, so they are left exactly as the Sheet has them.
+function shiftNewerPrintBalances(logs, logIndex, oldLog, member, delta) {
+  const token = (member && member.token) || oldLog.token;
+  const studentNo = (member && member.student_no) || oldLog.student_no;
+  return logs.map((log, index) => {
+    if (index >= logIndex || log.synced || log.action !== 'print') return log;
+    const sameMember =
+      (token && log.token === token) || (studentNo && log.student_no === studentNo);
+    if (!sameMember || !delta) return log;
+    return {
+      ...log,
+      balance_after: Math.round((Number(log.balance_after || 0) + delta) * 100) / 100,
+    };
+  });
+}
+
 // Undo the last print transaction
 export function undoLastPrint(state, logId, session) {
   if (!can(session, 'edit_print')) {
@@ -673,7 +690,11 @@ export function undoLastPrint(state, logId, session) {
     };
   }
 
-  const updatedLogs = state.logs.filter((l) => l.id !== logId);
+  // The row was never sent, so removing it keeps the Sheet in step.
+  const shiftedLogs = isGuest
+    ? state.logs
+    : shiftNewerPrintBalances(state.logs, logIndex, targetLog, member, targetLog.amount);
+  const updatedLogs = shiftedLogs.filter((l) => l.id !== logId);
 
   return {
     ok: true,
@@ -725,8 +746,7 @@ export function editPrintLog(state, { logId, newAmount, newNote, session }) {
     };
   }
 
-  // shortcut: edited rows keep their id, so a synced row is skipped by the receiver.
-  // Upgrade to a new UUID + "[edited ... ref:<id>]" before turning sync on.
+  // Only unsynced rows are editable, so this id has never reached the Sheet.
   const updatedLog = {
     ...oldLog,
     amount: parsedNewAmt,
@@ -737,7 +757,9 @@ export function editPrintLog(state, { logId, newAmount, newNote, session }) {
     synced: false,
   };
 
-  const updatedLogs = [...state.logs];
+  const updatedLogs = isGuest
+    ? [...state.logs]
+    : shiftNewerPrintBalances(state.logs, logIndex, oldLog, member, diff);
   updatedLogs[logIndex] = updatedLog;
 
   return {
@@ -750,9 +772,8 @@ export function editPrintLog(state, { logId, newAmount, newNote, session }) {
   };
 }
 
-// Void & Refund full amount
-// shortcut: removing a synced row only edits this phone; the Sheet keeps the old row.
-// Upgrade to a "[voided ref:<id>]" correction row before turning sync on.
+// Void & refund the full amount. Only unsynced rows reach here, so the Sheet
+// never saw the row and the phone stays in step.
 export function voidPrintLog(state, logId, session) {
   return undoLastPrint(state, logId, session);
 }
