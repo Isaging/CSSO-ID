@@ -1729,7 +1729,6 @@ const hasAdminKey = true;
                         style={[styles.chip, editStatus === statusKey && styles.chipOn]}
                         onPress={() => {
                           setEditStatus(statusKey);
-                          if (statusKey !== 'active') setEditReset(false);
                         }}
                         accessibilityRole="button"
                       >
